@@ -68,6 +68,17 @@ cd apps/api
 alembic upgrade head
 ```
 
+Seed the deterministic SaaS operations dataset:
+
+```bash
+cd apps/api
+python -m app.seed --json
+```
+
+This recreates the seeded SaaS domain tables with 60 accounts, 600 invoices,
+6,000 product events, and 240 support tickets. Re-running it should produce the
+same counts and fingerprint.
+
 ## Frontend Development
 
 ```bash
