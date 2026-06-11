@@ -63,6 +63,10 @@ If implementation effort grows, cut optional infrastructure before cutting evide
 
 ## Testing And Verification
 
+- Follow TDD for behavior that encodes product intent, safety, evidence quality, or non-obvious domain rules. Write the smallest failing behavior test first, implement the narrowest change to pass it, then refactor while green.
+- Prefer behavior and contract tests over implementation-detail tests. Tests should read like product claims: deterministic seed data, evidence-backed metric semantics, approval gating, cited report claims, and failure visibility.
+- Use vertical red-green-refactor slices rather than writing a large batch of speculative tests before implementation. One behavior, one failing test, one minimal implementation, then repeat.
+- Do not force TDD onto low-value surfaces such as cosmetic CSS, mechanical wiring, or framework boilerplate. For UI, combine focused contract/type checks with browser smoke tests for rendered behavior.
 - Add regression tests for scenario seed integrity before changing scenario data.
 - Test API contracts with focused backend tests.
 - Test the investigation workflow against eval cases, not just happy-path unit tests.
