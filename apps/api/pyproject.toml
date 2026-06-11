@@ -24,6 +24,9 @@ dev = [
   "pytest>=8,<9",
 ]
 
+[project.scripts]
+seed-saas-data = "app.seed:main"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]

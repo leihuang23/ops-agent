@@ -10,12 +10,14 @@ __pycache__/
 .mypy_cache/
 .venv/
 .omx/
+learning/
 dist/
 build/
 
 node_modules/
 .next/
 out/
+*.tsbuildinfo
 
 *.pyc
 *.pyo
