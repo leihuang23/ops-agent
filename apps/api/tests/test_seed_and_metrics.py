@@ -77,6 +77,7 @@ def test_seed_command_data_is_deterministic(
             "invoices": 600,
             "product_events": 6000,
             "support_tickets": 240,
+            "incidents": 1,
         }
         assert second_result.counts == first_result.counts
         assert second_result.fingerprint == first_result.fingerprint
