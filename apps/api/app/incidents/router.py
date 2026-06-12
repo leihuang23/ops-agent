@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
+from app.core.access import require_demo_data_access
 from app.db.session import get_db
 
 from .schemas import IncidentCreate, IncidentDetail, IncidentSummary
@@ -12,7 +13,11 @@ from .service import (
     list_incidents,
 )
 
-router = APIRouter(prefix="/incidents", tags=["incidents"])
+router = APIRouter(
+    prefix="/incidents",
+    tags=["incidents"],
+    dependencies=[Depends(require_demo_data_access)],
+)
 
 
 @router.get("")

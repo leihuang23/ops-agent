@@ -568,6 +568,8 @@ def build_incidents(session: Session) -> list[Incident]:
             "invoice_ids": failed_invoice_ids,
         },
         "affected_accounts": affected_accounts,
+        "support_signals": support_signal_dicts_for_accounts(session, list(accounts)),
+        "product_signals": product_signal_dicts_for_accounts(session, list(accounts)),
         "support_ticket_ids": ticket_ids_for_accounts(session, list(accounts)),
         "product_event_names": product_event_names_for_accounts(session, list(accounts)),
         "source_queries": [
@@ -630,6 +632,78 @@ def ticket_ids_for_accounts(session: Session, account_ids: list[str]) -> list[st
             )
             .order_by(SupportTicket.created_at.desc(), SupportTicket.id)
             .limit(12)
+        )
+    ]
+
+
+def support_signal_dicts_for_accounts(
+    session: Session, account_ids: list[str]
+) -> list[dict[str, object]]:
+    return [
+        {
+            "ticket_id": row.ticket_id,
+            "account_id": row.account_id,
+            "account_name": row.account_name,
+            "created_at": row.created_at.isoformat(),
+            "status": row.status,
+            "priority": row.priority,
+            "category": row.category,
+            "subject": row.subject,
+            "sentiment": row.sentiment,
+            "source_scenario": row.source_scenario,
+        }
+        for row in session.execute(
+            select(
+                SupportTicket.id.label("ticket_id"),
+                SupportTicket.account_id.label("account_id"),
+                Account.name.label("account_name"),
+                SupportTicket.created_at.label("created_at"),
+                SupportTicket.status.label("status"),
+                SupportTicket.priority.label("priority"),
+                SupportTicket.category.label("category"),
+                SupportTicket.subject.label("subject"),
+                SupportTicket.sentiment.label("sentiment"),
+                SupportTicket.source_scenario.label("source_scenario"),
+            )
+            .join(Account, Account.id == SupportTicket.account_id)
+            .where(
+                SupportTicket.account_id.in_(account_ids),
+                SupportTicket.created_at >= DATASET_ANCHOR - timedelta(days=30),
+            )
+            .order_by(SupportTicket.created_at.desc(), SupportTicket.id)
+            .limit(12)
+        )
+    ]
+
+
+def product_signal_dicts_for_accounts(
+    session: Session, account_ids: list[str]
+) -> list[dict[str, object]]:
+    return [
+        {
+            "event_name": row.event_name,
+            "event_count": int(row.event_count or 0),
+            "affected_accounts": int(row.affected_accounts or 0),
+            "latest_event_at": row.latest_event_at.isoformat(),
+            "source_scenario": row.source_scenario,
+        }
+        for row in session.execute(
+            select(
+                ProductEvent.event_name.label("event_name"),
+                ProductEvent.source_scenario.label("source_scenario"),
+                func.count(ProductEvent.id).label("event_count"),
+                func.count(func.distinct(ProductEvent.account_id)).label(
+                    "affected_accounts"
+                ),
+                func.max(ProductEvent.event_time).label("latest_event_at"),
+            )
+            .where(
+                ProductEvent.account_id.in_(account_ids),
+                ProductEvent.event_time >= DATASET_ANCHOR - timedelta(days=30),
+            )
+            .group_by(ProductEvent.event_name, ProductEvent.source_scenario)
+            .order_by(func.count(ProductEvent.id).desc(), ProductEvent.event_name)
+            .limit(8)
         )
     ]
 

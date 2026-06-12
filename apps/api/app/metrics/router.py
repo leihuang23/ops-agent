@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
+from app.core.access import require_demo_data_access
 from app.db.session import get_db
 from app.incidents.schemas import RevenueAnomaly
 from app.incidents.service import detect_revenue_anomalies
@@ -25,13 +25,8 @@ from .service import (
     get_ticket_volume_metrics,
 )
 
-def require_demo_metrics_access() -> None:
-    settings = get_settings()
-    if settings.app_env not in {"local", "test", "development", "demo"}:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Metrics endpoints are only available in local, test, development, or demo environments.",
-        )
+
+require_demo_metrics_access = require_demo_data_access
 
 
 router = APIRouter(
