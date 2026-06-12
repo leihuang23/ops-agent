@@ -167,7 +167,7 @@ def create_or_get_incident_from_anomaly(
         session.refresh(incident)
     except IntegrityError:
         session.rollback()
-        raced_incident = session.get(Incident, incident_id)
+        raced_incident = session.get(Incident, incident_id, populate_existing=True)
         if raced_incident is None:
             raise
         return _incident_detail(session, raced_incident), False
