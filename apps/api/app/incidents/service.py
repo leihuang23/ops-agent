@@ -252,10 +252,12 @@ def _failed_invoice_ids_by_account(
 ) -> dict[str, list[str]]:
     rows = session.execute(
         select(Invoice.account_id, Invoice.id)
+        .join(Subscription, Subscription.id == Invoice.subscription_id)
         .where(
             Invoice.status == "failed",
             Invoice.invoice_date >= start_date,
             Invoice.invoice_date < end_date,
+            Subscription.status == "active",
         )
         .order_by(Invoice.account_id, Invoice.id)
     ).all()
@@ -354,6 +356,12 @@ def _incident_detail(session: Session, incident: Incident) -> IncidentDetail:
     affected_accounts = [
         AffectedAccount(**account) for account in evidence.get("affected_accounts", [])
     ]
+    support_signals = [
+        SupportSignal(**signal) for signal in evidence.get("support_signals", [])
+    ]
+    product_signals = [
+        ProductSignal(**signal) for signal in evidence.get("product_signals", [])
+    ]
 
     return IncidentDetail(
         id=incident.id,
@@ -366,8 +374,10 @@ def _incident_detail(session: Session, incident: Incident) -> IncidentDetail:
         source_scenario=incident.source_scenario,
         metric_evidence=metric_evidence,
         affected_accounts=affected_accounts,
-        support_signals=_support_signals(session, account_ids, incident.detected_at),
-        product_signals=_product_signals(session, account_ids, incident.detected_at),
+        support_signals=support_signals
+        or _support_signals(session, account_ids, incident.detected_at),
+        product_signals=product_signals
+        or _product_signals(session, account_ids, incident.detected_at),
         evidence=evidence,
     )
 
@@ -378,6 +388,12 @@ def _anomaly_evidence(anomaly: RevenueAnomaly) -> dict[str, Any]:
         "metric_evidence": anomaly.metric_evidence.model_dump(mode="json"),
         "affected_accounts": [
             account.model_dump(mode="json") for account in anomaly.affected_accounts
+        ],
+        "support_signals": [
+            signal.model_dump(mode="json") for signal in anomaly.support_signals
+        ],
+        "product_signals": [
+            signal.model_dump(mode="json") for signal in anomaly.product_signals
         ],
         "support_ticket_ids": [
             signal.ticket_id for signal in anomaly.support_signals
