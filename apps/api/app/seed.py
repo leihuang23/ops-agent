@@ -122,8 +122,8 @@ def scenario_for_account(account_number: int) -> str | None:
 
 
 def ensure_seeded_if_empty(session: Session) -> SeedResult | None:
-    existing_accounts = session.scalar(select(func.count()).select_from(Account)) or 0
-    if existing_accounts > 0:
+    existing_account = session.scalar(select(Account.id).limit(1))
+    if existing_account is not None:
         return None
     return reseed_database(session)
 
