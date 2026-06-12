@@ -5,6 +5,8 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.session import get_db
+from app.incidents.schemas import RevenueAnomaly
+from app.incidents.service import detect_revenue_anomalies
 
 from .schemas import (
     ActiveUserMetrics,
@@ -67,3 +69,8 @@ def active_users(db: Session = Depends(get_db)) -> ActiveUserMetrics:
 @router.get("/dashboard")
 def dashboard(db: Session = Depends(get_db)) -> DashboardMetrics:
     return get_dashboard_metrics(db)
+
+
+@router.get("/anomalies")
+def anomalies(db: Session = Depends(get_db)) -> list[RevenueAnomaly]:
+    return detect_revenue_anomalies(db)
