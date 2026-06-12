@@ -1,3 +1,5 @@
+import { resolveApiBaseUrl } from './resolveApiBaseUrl';
+
 export type HealthResponse = {
   status: string;
   service: string;
@@ -68,19 +70,9 @@ export type DashboardMetricsResult =
   | { ok: true; data: DashboardMetrics }
   | { ok: false; error: string };
 
-export function resolveApiBaseUrl(): string {
-  if (typeof window === 'undefined' && process.env.API_INTERNAL_BASE_URL) {
-    return process.env.API_INTERNAL_BASE_URL;
-  }
-
-  return process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000';
-}
-
-const apiBaseUrl = resolveApiBaseUrl();
-
 export async function getHealth(): Promise<HealthResponse> {
   try {
-    const response = await fetch(`${apiBaseUrl}/health`, {
+    const response = await fetch(`${resolveApiBaseUrl()}/health`, {
       cache: 'no-store',
     });
 
@@ -100,7 +92,7 @@ export async function getHealth(): Promise<HealthResponse> {
 
 export async function getDashboardMetrics(): Promise<DashboardMetricsResult> {
   try {
-    const response = await fetch(`${apiBaseUrl}/metrics/dashboard`, {
+    const response = await fetch(`${resolveApiBaseUrl()}/metrics/dashboard`, {
       cache: 'no-store',
     });
 
