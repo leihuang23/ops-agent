@@ -134,6 +134,9 @@ def ensure_seeded_if_empty(session: Session) -> SeedResult | None:
         if session.scalar(select(Account.id).limit(1)) is not None:
             return None
         raise
+    except Exception:
+        session.rollback()
+        raise
 
 
 def insert_seed_data(session: Session) -> SeedResult:
