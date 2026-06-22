@@ -38,6 +38,34 @@ def test_bootstrap_lock_is_noop_for_non_postgres_dialects(
         pass
 
 
+def test_bootstrap_lock_acquires_and_releases_advisory_lock_for_postgres_dialects() -> None:
+    from unittest.mock import MagicMock
+
+    from app.bootstrap import BOOTSTRAP_LOCK_ID
+
+    connection = MagicMock()
+    connection.__enter__.return_value = connection
+    connection.execution_options.return_value = connection
+
+    engine = MagicMock()
+    engine.dialect.name = "postgresql"
+    engine.connect.return_value = connection
+
+    with bootstrap_lock(engine):
+        pass
+
+    assert connection.execute.call_count == 2
+    assert (
+        connection.execute.call_args_list[0].args[0].text
+        == "SELECT pg_advisory_lock(:lock_id)"
+    )
+    assert connection.execute.call_args_list[0].args[1] == {"lock_id": BOOTSTRAP_LOCK_ID}
+    assert (
+        connection.execute.call_args_list[1].args[0].text
+        == "SELECT pg_advisory_unlock(:lock_id)"
+    )
+    assert connection.execute.call_args_list[1].args[1] == {"lock_id": BOOTSTRAP_LOCK_ID}
+
 def test_run_startup_bootstrap_migrates_and_seeds_blank_database(
     session_factory: Callable[[], Session],
     monkeypatch,
