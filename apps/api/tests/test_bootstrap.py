@@ -70,7 +70,8 @@ def test_run_startup_bootstrap_migrates_and_seeds_blank_database(
     session_factory: Callable[[], Session],
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr("app.bootstrap.engine", session_factory().bind)
+    with session_factory() as session:
+        monkeypatch.setattr("app.bootstrap.engine", session.get_bind())
     monkeypatch.setattr("app.bootstrap.SessionLocal", session_factory)
     migration_calls: list[str] = []
 
