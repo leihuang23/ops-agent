@@ -11,5 +11,9 @@ export async function openIncidentFromAnomaly(formData: FormData) {
   }
 
   const incident = await createIncidentFromAnomaly(anomalyId);
-  redirect(`/incidents/${incident.id}`);
+  if (!incident.ok) {
+    redirect(`/?incident_error=${encodeURIComponent(incident.error)}`);
+  }
+
+  redirect(`/incidents/${incident.data.id}`);
 }

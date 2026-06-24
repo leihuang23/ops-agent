@@ -159,6 +159,21 @@ export type IncidentDetailResult =
   | { ok: true; data: IncidentDetail }
   | { ok: false; error: string };
 
+export type CreateIncidentFromAnomalyResult =
+  | { ok: true; data: IncidentDetail }
+  | { ok: false; error: string };
+
+async function readErrorMessage(response: Response, fallback: string): Promise<string> {
+  try {
+    const body = (await response.json()) as { detail?: unknown };
+    if (typeof body.detail === 'string' && body.detail.length > 0) {
+      return body.detail;
+    }
+  } catch {}
+
+  return fallback;
+}
+
 export async function getHealth(): Promise<HealthResponse> {
   try {
     const response = await fetch(`${resolveApiBaseUrl()}/health`, {
@@ -231,21 +246,37 @@ export async function getRevenueAnomalies(): Promise<RevenueAnomaliesResult> {
 
 export async function createIncidentFromAnomaly(
   anomalyId: string,
-): Promise<IncidentDetail> {
-  const response = await fetch(`${resolveApiBaseUrl()}/incidents`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ anomaly_id: anomalyId }),
-    cache: 'no-store',
-  });
+): Promise<CreateIncidentFromAnomalyResult> {
+  try {
+    const response = await fetch(`${resolveApiBaseUrl()}/incidents`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ anomaly_id: anomalyId }),
+      cache: 'no-store',
+    });
 
-  if (!response.ok) {
-    throw new Error(`Incident creation returned HTTP ${response.status}`);
+    if (!response.ok) {
+      return {
+        ok: false,
+        error: await readErrorMessage(
+          response,
+          `Incident creation returned HTTP ${response.status}`,
+        ),
+      };
+    }
+
+    return {
+      ok: true,
+      data: (await response.json()) as IncidentDetail,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : 'Incident creation unavailable',
+    };
   }
-
-  return (await response.json()) as IncidentDetail;
 }
 
 export async function getIncident(incidentId: string): Promise<IncidentDetailResult> {
