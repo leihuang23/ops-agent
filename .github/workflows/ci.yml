@@ -23,7 +23,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_DB: test_ops_agent
           POSTGRES_USER: postgres
