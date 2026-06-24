@@ -3,9 +3,9 @@
 import { redirect } from 'next/navigation';
 
 import {
-  approveApproval,
+  approveApprovalRequest,
   createIncidentFromAnomaly,
-  rejectApproval,
+  rejectApprovalRequest,
   startInvestigation,
 } from '@/lib/api';
 
@@ -41,7 +41,7 @@ export async function startInvestigationFromIncident(formData: FormData) {
 export async function approveApprovalFromRun(formData: FormData) {
   const approvalId = readRequiredFormValue(formData, 'approval_id');
   const runId = readRequiredFormValue(formData, 'run_id');
-  const result = await approveApproval(
+  const result = await approveApprovalRequest(
     approvalId,
     'Approved from the investigation approval queue.',
   );
@@ -52,7 +52,7 @@ export async function approveApprovalFromRun(formData: FormData) {
 export async function rejectApprovalFromRun(formData: FormData) {
   const approvalId = readRequiredFormValue(formData, 'approval_id');
   const runId = readRequiredFormValue(formData, 'run_id');
-  const result = await rejectApproval(
+  const result = await rejectApprovalRequest(
     approvalId,
     'Rejected from the investigation approval queue.',
   );

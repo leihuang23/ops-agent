@@ -531,14 +531,14 @@ export async function getAgentRun(runId: string): Promise<AgentRunDetailResult> 
   }
 }
 
-export async function approveApproval(
+export async function approveApprovalRequest(
   approvalId: string,
   notes?: string,
 ): Promise<ApprovalDecisionResult> {
   return submitApprovalDecision(approvalId, 'approve', notes);
 }
 
-export async function rejectApproval(
+export async function rejectApprovalRequest(
   approvalId: string,
   notes?: string,
 ): Promise<ApprovalDecisionResult> {
