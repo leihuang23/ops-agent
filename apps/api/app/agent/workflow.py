@@ -307,9 +307,9 @@ def _report_evidence(
                 kind="document",
                 title=result["title"],
                 summary=result["snippet"],
-                reference_id=result["source_id"],
+                reference_id=result.get("citation", {}).get("chunk_id") or result["source_id"],
                 source_query=None,
-                citation=result["citation"],
+                citation=result.get("citation", {}),
             )
         )
 
