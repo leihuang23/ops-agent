@@ -45,7 +45,12 @@ function RunReport({ run }: { run: AgentRunDetail }) {
       <header className="dashboard-header">
         <div>
           <p className="eyebrow">Investigation {run.id}</p>
-          <h1>{report?.root_cause ?? 'Investigation failed before report synthesis'}</h1>
+          <h1>
+            {report?.root_cause ??
+              (run.status === 'running'
+                ? 'Investigation in progress'
+                : 'Investigation failed before report synthesis')}
+          </h1>
         </div>
         <div className="header-actions">
           <span className={`run-status run-status-${run.status}`}>{run.status}</span>
