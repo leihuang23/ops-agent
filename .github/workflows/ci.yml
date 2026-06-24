@@ -58,7 +58,7 @@ jobs:
 
       - name: Run API tests
         env:
-          DATABASE_URL: postgresql://postgres:test@postgres:5432/test_ops_agent
+          DATABASE_URL: postgresql+psycopg://postgres:test@postgres:5432/test_ops_agent
         run: pytest
 
   web-build:
