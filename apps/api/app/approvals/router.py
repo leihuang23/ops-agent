@@ -79,7 +79,6 @@ def approve(
 def reject(
     approval_id: str,
     payload: ApprovalDecisionCreate,
-    response: Response,
     db: Session = Depends(get_db),
 ) -> ApprovalRequestRead:
     try:
@@ -90,5 +89,4 @@ def reject(
             detail=str(exc),
         ) from exc
     except ValueError as exc:
-        response.status_code = status.HTTP_409_CONFLICT
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
