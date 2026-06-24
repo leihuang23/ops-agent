@@ -12,13 +12,21 @@ import {
   formatScenario,
 } from '@/lib/format';
 
-export default async function Home() {
+type HomeProps = {
+  searchParams?: {
+    incident_error?: string;
+  };
+};
+
+export default async function Home({ searchParams }: HomeProps) {
   const [health, dashboardResult, anomaliesResult] = await Promise.all([
     getHealth(),
     getDashboardMetrics(),
     getRevenueAnomalies(),
   ]);
   const apiOnline = health.status === 'ok';
+  const incidentError =
+    typeof searchParams?.incident_error === 'string' ? searchParams.incident_error : null;
 
   return (
     <main className="dashboard-shell">
@@ -32,6 +40,12 @@ export default async function Home() {
           {apiOnline ? 'API online' : 'API unavailable'}
         </div>
       </header>
+
+      {incidentError ? (
+        <section className="panel anomaly-panel" aria-live="polite">
+          <div className="panel-message error-detail">{incidentError}</div>
+        </section>
+      ) : null}
 
       {dashboardResult.ok ? (
         <Dashboard data={dashboardResult.data} anomaliesResult={anomaliesResult} />
