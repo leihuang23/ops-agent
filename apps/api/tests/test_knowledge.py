@@ -94,8 +94,8 @@ def test_builtin_knowledge_ingestion_stores_documents_chunks_and_citations(
             assert chunk is not None
             assert chunk.embedding
             assert chunk.citation_metadata["source_id"] == chunk.document_id
-        assert chunk.citation_metadata["title"] == "Billing Retry Regression Runbook"
-        assert chunk.citation_metadata["chunk_id"] == chunk.id
+            assert chunk.citation_metadata["title"] == "Billing Retry Regression Runbook"
+            assert chunk.citation_metadata["chunk_id"] == chunk.id
 
 
 def test_builtin_knowledge_ingestion_refreshes_stale_docs_and_prunes_removed_sources(
