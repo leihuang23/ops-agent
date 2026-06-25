@@ -54,6 +54,9 @@ class AgentRunRecorder:
         self._complete_step(step.id, output)
         return output
 
+    def _touch_run_heartbeat(self) -> None:
+        self.run.updated_at = utcnow_naive()
+
     def _start_step(
         self, *, stage: str, tool_name: str | None, inputs: object
     ) -> AgentRunStep:
@@ -74,6 +77,7 @@ class AgentRunRecorder:
             created_at=now,
         )
         self.session.add(step)
+        self._touch_run_heartbeat()
         self.session.commit()
         return step
 
@@ -101,6 +105,7 @@ class AgentRunRecorder:
         step.status = "succeeded"
         step.outputs = jsonable_encoder(output)
         step.completed_at = now
+        self._touch_run_heartbeat()
         self.session.commit()
 
     def _fail_step(self, step_id: str, exc: Exception) -> None:
@@ -111,4 +116,5 @@ class AgentRunRecorder:
             step.status = "failed"
             step.error = str(exc)
             step.completed_at = now
+            self._touch_run_heartbeat()
             self.session.commit()

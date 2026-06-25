@@ -70,6 +70,8 @@ def start_investigation_run(
         failed_run = session.get(AgentRun, run.id)
         if failed_run is None:
             raise
+        if failed_run.status != "running":
+            return get_run_detail(session, failed_run.id), True
         completed_at = utcnow_naive()
         failed_run.status = "failed"
         failed_run.error = str(exc)
@@ -82,7 +84,10 @@ def start_investigation_run(
     finished_run = session.get(AgentRun, run.id)
     if finished_run is None:
         raise RuntimeError(f"Agent run disappeared: {run.id}")
+    if finished_run.status != "running":
+        return get_run_detail(session, finished_run.id), True
     finished_run.status = "succeeded"
+    finished_run.error = None
     finished_run.final_report = report.model_dump(mode="json")
     finished_run.token_estimate = estimate_token_count(finished_run.final_report)
     finished_run.cost_estimate_usd = 0.0

@@ -194,6 +194,60 @@ def test_investigation_start_restarts_after_orphaned_running_run(
     assert orphaned_payload["error"] == "Investigation interrupted before completion."
 
 
+def test_abandoned_run_is_not_resurrected_when_workflow_completes(
+    session_factory: Callable[[], Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with session_factory() as session:
+        reseed_database(session)
+        incident_id = session.scalar(select(Incident.id))
+        assert incident_id is not None
+
+    def workflow_abandoned_before_completion(
+        session: Session, run: AgentRun, trace: object | None = None
+    ) -> InvestigationReport:
+        abandoned_run = session.get(AgentRun, run.id)
+        assert abandoned_run is not None
+        abandoned_run.status = "failed"
+        abandoned_run.error = "Investigation interrupted before completion."
+        abandoned_run.completed_at = datetime(2026, 6, 9, 12, 40, 0)
+        abandoned_run.updated_at = datetime(2026, 6, 9, 12, 40, 0)
+        session.commit()
+        return sample_report()
+
+    monkeypatch.setattr(
+        "app.agent.service.run_investigation_workflow",
+        workflow_abandoned_before_completion,
+    )
+
+    def override_get_db() -> Generator[Session, None, None]:
+        with session_factory() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/agent/investigations",
+            json={"incident_id": incident_id},
+        )
+        run_id = response.json()["id"]
+        detail_response = client.get(f"/agent/runs/{run_id}")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["status"] == "failed"
+    assert payload["error"] == "Investigation interrupted before completion."
+    assert payload["final_report"] is None
+
+    assert detail_response.status_code == 200
+    detail_payload = detail_response.json()
+    assert detail_payload["status"] == "failed"
+    assert detail_payload["final_report"] is None
+
+
 def test_investigation_succeeds_when_action_proposal_fails(
     session_factory: Callable[[], Session],
     monkeypatch: pytest.MonkeyPatch,
