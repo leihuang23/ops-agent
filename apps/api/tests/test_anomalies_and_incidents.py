@@ -154,7 +154,11 @@ def test_incident_detail_endpoint_shows_accounts_and_metric_evidence(
 ) -> None:
     with session_factory() as session:
         reseed_database(session)
-        incident_id = session.scalar(select(Incident.id))
+        incident_id = session.scalar(
+            select(Incident.id).where(
+                Incident.source_scenario == "checkout_retry_regression"
+            )
+        )
 
     def override_get_db() -> Generator[Session, None, None]:
         with session_factory() as db:
@@ -195,7 +199,7 @@ def test_incidents_endpoint_lists_seeded_incidents(
 
     assert response.status_code == 200
     payload = response.json()
-    assert len(payload) == 1
+    assert len(payload) == 5
     assert payload[0].keys() == {
         "id",
         "title",
@@ -206,7 +210,7 @@ def test_incidents_endpoint_lists_seeded_incidents(
         "summary",
         "affected_account_count",
     }
-    assert payload[0]["affected_account_count"] == 6
+    assert any(item["affected_account_count"] == 6 for item in payload)
 
 
 def test_incident_endpoints_return_not_found_for_unknown_ids(

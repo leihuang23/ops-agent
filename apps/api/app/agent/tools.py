@@ -133,7 +133,11 @@ def query_revenue_metrics(
         session, previous_start, previous_end_exclusive
     )
     failed_renewal_rows = _failed_renewal_rows(
-        session, current_start, current_end_exclusive
+        session,
+        current_start,
+        current_end_exclusive,
+        account_ids=[account.account_id for account in incident.affected_accounts],
+        invoice_ids=invoice_ids,
     )
 
     return QueryRevenueMetricsOutput(
@@ -196,7 +200,7 @@ def query_revenue_metrics(
                 reference_id=f"{incident.id}:failed-renewals",
                 summary=(
                     f"Found {sum(row['failed_invoice_count'] for row in failed_renewal_rows)} "
-                    "failed current-window renewals worth "
+                    "failed incident renewal invoices worth "
                     f"{sum(row['failed_invoice_cents'] for row in failed_renewal_rows)} cents."
                 ),
                 source_query=(
@@ -207,13 +211,19 @@ def query_revenue_metrics(
                     "JOIN subscriptions ON subscriptions.id = invoices.subscription_id "
                     "WHERE invoices.status = 'failed' "
                     "AND subscriptions.status = 'active' "
-                    "AND invoices.invoice_date >= :current_window_start "
-                    "AND invoices.invoice_date < :current_window_end_exclusive "
+                    "AND invoices.account_id IN :affected_account_ids "
+                    "AND (invoices.id IN :incident_invoice_ids "
+                    "OR (invoices.invoice_date >= :current_window_start "
+                    "AND invoices.invoice_date < :current_window_end_exclusive)) "
                     "GROUP BY invoices.account_id, accounts.name;"
                 ),
                 citation={
                     "query_name": "failed_renewal_invoices_by_account",
                     "parameters": {
+                        "affected_account_ids": [
+                            account.account_id for account in incident.affected_accounts
+                        ],
+                        "incident_invoice_ids": invoice_ids,
                         "current_window_start": current_start.isoformat(),
                         "current_window_end_exclusive": current_end_exclusive.isoformat(),
                     },
@@ -370,8 +380,27 @@ def _paid_invoice_sum(session: Session, start_date: date, end_date: date) -> int
 
 
 def _failed_renewal_rows(
-    session: Session, start_date: date, end_date: date
+    session: Session,
+    start_date: date,
+    end_date: date,
+    *,
+    account_ids: list[str],
+    invoice_ids: list[str],
 ) -> list[dict[str, Any]]:
+    if not account_ids:
+        return []
+
+    invoice_filter = Invoice.account_id.in_(account_ids)
+    if invoice_ids:
+        invoice_filter = invoice_filter & (
+            Invoice.id.in_(invoice_ids)
+            | ((Invoice.invoice_date >= start_date) & (Invoice.invoice_date < end_date))
+        )
+    else:
+        invoice_filter = invoice_filter & (
+            (Invoice.invoice_date >= start_date) & (Invoice.invoice_date < end_date)
+        )
+
     rows = session.execute(
         select(
             Invoice.account_id.label("account_id"),
@@ -385,8 +414,7 @@ def _failed_renewal_rows(
         .join(Subscription, Subscription.id == Invoice.subscription_id)
         .where(
             Invoice.status == "failed",
-            Invoice.invoice_date >= start_date,
-            Invoice.invoice_date < end_date,
+            invoice_filter,
             Subscription.status == "active",
         )
         .group_by(Invoice.account_id, Account.name)
@@ -401,8 +429,7 @@ def _failed_renewal_rows(
         .join(Subscription, Subscription.id == Invoice.subscription_id)
         .where(
             Invoice.status == "failed",
-            Invoice.invoice_date >= start_date,
-            Invoice.invoice_date < end_date,
+            invoice_filter,
             Subscription.status == "active",
         )
         .order_by(Invoice.account_id, Invoice.id)

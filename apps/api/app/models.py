@@ -248,6 +248,9 @@ class AgentRun(Base):
     )
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     trace_id: Mapped[str | None] = mapped_column(String(96), index=True)
+    trace_url: Mapped[str | None] = mapped_column(String(512))
+    trace_provider: Mapped[str | None] = mapped_column(String(32), index=True)
+    trace_metadata: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     input_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     final_report: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     token_estimate: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -274,6 +277,9 @@ class AgentRun(Base):
         back_populates="run",
         cascade="all, delete-orphan",
         order_by="ActionAuditEvent.created_at",
+    )
+    eval_results: Mapped[list[EvalResult]] = relationship(
+        back_populates="agent_run", cascade="all, delete-orphan"
     )
 
 
@@ -394,6 +400,61 @@ class ActionAuditEvent(Base):
     )
 
 
+class EvalCase(Base):
+    __tablename__ = "eval_cases"
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    scenario: Mapped[str] = mapped_column(String(80), nullable=False, unique=True, index=True)
+    incident_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("incidents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    title: Mapped[str] = mapped_column(String(180), nullable=False)
+    expected_root_cause: Mapped[str] = mapped_column(Text, nullable=False)
+    expected_evidence_types: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    expected_evidence: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    false_leads: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    recommended_actions: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    incident: Mapped[Incident] = relationship()
+    results: Mapped[list[EvalResult]] = relationship(
+        back_populates="eval_case", cascade="all, delete-orphan"
+    )
+
+
+class EvalResult(Base):
+    __tablename__ = "eval_results"
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    eval_run_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    eval_case_id: Mapped[str] = mapped_column(
+        String(80), ForeignKey("eval_cases.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    agent_run_id: Mapped[str] = mapped_column(
+        String(48), ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    scenario: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    passed: Mapped[bool] = mapped_column(Boolean, nullable=False, index=True)
+    root_cause_score: Mapped[float] = mapped_column(Float, nullable=False)
+    citation_quality_score: Mapped[float] = mapped_column(Float, nullable=False)
+    action_safety_score: Mapped[float] = mapped_column(Float, nullable=False)
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    expected_root_cause: Mapped[str] = mapped_column(Text, nullable=False)
+    actual_root_cause: Mapped[str | None] = mapped_column(Text)
+    expected_evidence_types: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    observed_evidence_types: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    failure_reasons: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    example_output: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    completed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    eval_case: Mapped[EvalCase] = relationship(back_populates="results")
+    agent_run: Mapped[AgentRun] = relationship(back_populates="eval_results")
+
+
 Index("ix_invoices_account_date", Invoice.account_id, Invoice.invoice_date)
 Index("ix_product_events_account_time", ProductEvent.account_id, ProductEvent.event_time)
 Index("ix_support_tickets_account_created", SupportTicket.account_id, SupportTicket.created_at)
@@ -407,3 +468,5 @@ Index("ix_agent_run_steps_run_stage", AgentRunStep.run_id, AgentRunStep.stage)
 Index("ix_mock_actions_run_status", MockAction.run_id, MockAction.status)
 Index("ix_approval_requests_run_status", ApprovalRequest.run_id, ApprovalRequest.status)
 Index("ix_action_audit_events_run_created", ActionAuditEvent.run_id, ActionAuditEvent.created_at)
+Index("ix_eval_results_run_case", EvalResult.eval_run_id, EvalResult.eval_case_id)
+Index("ix_eval_results_case_created", EvalResult.eval_case_id, EvalResult.created_at)

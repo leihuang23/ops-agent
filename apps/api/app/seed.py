@@ -28,6 +28,8 @@ from app.models import (
     AgentRun,
     AgentRunStep,
     ApprovalRequest,
+    EvalCase,
+    EvalResult,
     Incident,
     Invoice,
     KnowledgeDocument,
@@ -55,6 +57,7 @@ SCENARIOS: Final[dict[str, dict[str, object]]] = {
             "billing support tickets",
             "retry failure reasons",
         ],
+        "expected_evidence_types": ["sql", "document", "ticket"],
         "false_leads": ["seasonal usage dip", "enterprise procurement churn"],
         "recommended_actions": [
             "repair retry workflow",
@@ -69,6 +72,7 @@ SCENARIOS: Final[dict[str, dict[str, object]]] = {
             "account escalation tickets",
             "void June invoices",
         ],
+        "expected_evidence_types": ["sql", "document", "ticket"],
         "false_leads": ["payment method expiration", "report export bug"],
         "recommended_actions": [
             "prepare win-back outreach",
@@ -83,6 +87,7 @@ SCENARIOS: Final[dict[str, dict[str, object]]] = {
             "integration tickets",
             "lower recent user activity",
         ],
+        "expected_evidence_types": ["sql", "document", "ticket"],
         "false_leads": ["billing retry regression", "support backlog"],
         "recommended_actions": [
             "prioritize import fix",
@@ -97,6 +102,7 @@ SCENARIOS: Final[dict[str, dict[str, object]]] = {
             "product support tickets",
             "high-priority open tickets",
         ],
+        "expected_evidence_types": ["sql", "document", "ticket"],
         "false_leads": ["payment failure wave", "usage outage"],
         "recommended_actions": [
             "fix export filters",
@@ -111,6 +117,7 @@ SCENARIOS: Final[dict[str, dict[str, object]]] = {
             "card expiration tickets",
             "failed renewal amounts",
         ],
+        "expected_evidence_types": ["sql", "document", "ticket"],
         "false_leads": ["checkout retry regression", "enterprise churn"],
         "recommended_actions": [
             "draft billing contact reminders",
@@ -123,6 +130,8 @@ SCENARIO_ACCOUNT_NUMBERS: Final[dict[str, set[int]]] = {
 }
 
 MODEL_ORDER: Final[tuple[type, ...]] = (
+    EvalResult,
+    EvalCase,
     ActionAuditEvent,
     ApprovalRequest,
     MockAction,
@@ -195,6 +204,8 @@ def insert_seed_data(session: Session) -> SeedResult:
     session.add_all(support_tickets)
     session.flush()
     session.add_all(build_incidents(session))
+    session.flush()
+    session.add_all(build_eval_cases())
     session.flush()
     ingest_builtin_knowledge_documents(session, commit=False)
 
@@ -544,112 +555,233 @@ def build_incidents(session: Session) -> list[Incident]:
     current_mrr = invoice_sum(
         session, "paid", windows.current_start, windows.current_end_exclusive
     )
-    failed_rows = session.execute(
-        select(
-            Invoice.id,
-            Invoice.account_id,
-            Account.name,
-            Account.segment,
-            Account.health_score,
-            Account.source_scenario,
-            Invoice.amount_cents,
-        )
-        .join(Account, Account.id == Invoice.account_id)
-        .join(Subscription, Subscription.id == Invoice.subscription_id)
-        .where(
-            Invoice.status == "failed",
-            Invoice.invoice_date >= windows.current_start,
-            Invoice.invoice_date < windows.current_end_exclusive,
-            Subscription.status == "active",
-        )
-        .order_by(Invoice.amount_cents.desc(), Account.name)
-    ).all()
-    if previous_mrr <= 0 or current_mrr >= previous_mrr or not failed_rows:
+    if previous_mrr <= 0 or current_mrr >= previous_mrr:
         return []
 
-    accounts: dict[str, dict[str, object]] = {}
-    for row in failed_rows:
-        account = accounts.setdefault(
-            row.account_id,
-            {
-                "account_id": row.account_id,
-                "account_name": row.name,
-                "segment": row.segment,
-                "health_score": row.health_score,
-                "failed_invoice_cents": 0,
-                "failed_invoice_count": 0,
-                "failed_invoice_ids": [],
-                "source_scenario": row.source_scenario,
-            },
+    incidents: list[Incident] = []
+    for scenario in SCENARIOS:
+        account_ids = [
+            account_id(account_number)
+            for account_number in sorted(SCENARIO_ACCOUNT_NUMBERS[scenario])
+        ]
+        affected_accounts = scenario_affected_accounts(
+            session,
+            scenario=scenario,
+            account_ids=account_ids,
+            current_start=windows.current_start,
+            current_end_exclusive=windows.current_end_exclusive,
         )
-        account["failed_invoice_cents"] = int(account["failed_invoice_cents"]) + row.amount_cents
-        account["failed_invoice_count"] = int(account["failed_invoice_count"]) + 1
-        account["failed_invoice_ids"].append(row.id)
 
-    affected_accounts = list(accounts.values())
-    failed_invoice_ids = [
-        invoice_id
-        for account in affected_accounts
-        for invoice_id in account["failed_invoice_ids"]
-    ]
-    failed_invoice_cents = sum(
-        int(account["failed_invoice_cents"]) for account in affected_accounts
+        failed_invoice_ids = [
+            invoice_id
+            for account in affected_accounts
+            for invoice_id in account["failed_invoice_ids"]
+        ]
+        failed_invoice_cents = sum(
+            int(account["failed_invoice_cents"]) for account in affected_accounts
+        )
+        failed_invoice_count = sum(
+            int(account["failed_invoice_count"]) for account in affected_accounts
+        )
+        delta_cents = current_mrr - previous_mrr
+        delta_percent = round((delta_cents / previous_mrr) * 100, 2)
+        anomaly_id = anomaly_id_for_window(windows.current_start)
+        scenario_anomaly_id = (
+            anomaly_id
+            if scenario == "checkout_retry_regression"
+            else f"{anomaly_id}-{scenario}"
+        )
+        evidence = {
+            "anomaly_id": scenario_anomaly_id,
+            "metric_evidence": {
+                "metric_name": PAID_INVOICE_MRR_METRIC,
+                "current_window_start": windows.current_start.isoformat(),
+                "current_window_end": windows.current_end.isoformat(),
+                "previous_window_start": windows.previous_start.isoformat(),
+                "previous_window_end": windows.previous_end.isoformat(),
+                "current_value_cents": current_mrr,
+                "previous_value_cents": previous_mrr,
+                "delta_cents": delta_cents,
+                "delta_percent": delta_percent,
+                "failed_invoice_cents": failed_invoice_cents,
+                "failed_invoice_count": failed_invoice_count,
+                "invoice_ids": failed_invoice_ids,
+            },
+            "affected_accounts": affected_accounts,
+            "support_signals": support_signal_dicts_for_accounts(session, account_ids),
+            "product_signals": product_signal_dicts_for_accounts(session, account_ids),
+            "support_ticket_ids": ticket_ids_for_accounts(session, account_ids),
+            "product_event_names": product_event_names_for_accounts(session, account_ids),
+            "source_queries": scenario_source_queries(scenario),
+        }
+
+        incidents.append(
+            Incident(
+                id=incident_id_for_scenario(scenario, anomaly_id),
+                title=scenario_incident_title(scenario),
+                status="open",
+                severity="high" if scenario == "checkout_retry_regression" else "medium",
+                anomaly_type=REVENUE_MRR_DROP_ANOMALY_TYPE,
+                metric_name=PAID_INVOICE_MRR_METRIC,
+                summary=scenario_incident_summary(scenario),
+                source_scenario=scenario,
+                detected_at=DATASET_ANCHOR,
+                current_value_cents=current_mrr,
+                previous_value_cents=previous_mrr,
+                delta_cents=delta_cents,
+                delta_percent=delta_percent,
+                affected_account_ids=account_ids,
+                evidence=evidence,
+                created_at=DATASET_ANCHOR,
+                updated_at=DATASET_ANCHOR,
+            )
+        )
+
+    return incidents
+
+
+def build_eval_cases() -> list[EvalCase]:
+    anomaly_id = anomaly_id_for_window(revenue_week_windows(DATASET_ANCHOR).current_start)
+    cases: list[EvalCase] = []
+    for scenario, metadata in SCENARIOS.items():
+        cases.append(
+            EvalCase(
+                id=f"eval_{scenario}",
+                scenario=scenario,
+                incident_id=incident_id_for_scenario(scenario, anomaly_id),
+                title=f"Regression eval: {scenario.replace('_', ' ')}",
+                expected_root_cause=str(metadata["root_cause"]),
+                expected_evidence_types=list(metadata["expected_evidence_types"]),
+                expected_evidence=list(metadata["expected_evidence"]),
+                false_leads=list(metadata["false_leads"]),
+                recommended_actions=list(metadata["recommended_actions"]),
+                created_at=DATASET_ANCHOR,
+                updated_at=DATASET_ANCHOR,
+            )
+        )
+    return cases
+
+
+def scenario_affected_accounts(
+    session: Session,
+    *,
+    scenario: str,
+    account_ids: list[str],
+    current_start: date,
+    current_end_exclusive: date,
+) -> list[dict[str, object]]:
+    accounts = session.scalars(
+        select(Account).where(Account.id.in_(account_ids)).order_by(Account.name)
+    ).all()
+    failed_start = (
+        date(2026, 6, 1)
+        if scenario == "payment_method_expiration"
+        else current_start
     )
-    delta_cents = current_mrr - previous_mrr
-    delta_percent = round((delta_cents / previous_mrr) * 100, 2)
-    anomaly_id = anomaly_id_for_window(windows.current_start)
-    evidence = {
-        "anomaly_id": anomaly_id,
-        "metric_evidence": {
-            "metric_name": PAID_INVOICE_MRR_METRIC,
-            "current_window_start": windows.current_start.isoformat(),
-            "current_window_end": windows.current_end.isoformat(),
-            "previous_window_start": windows.previous_start.isoformat(),
-            "previous_window_end": windows.previous_end.isoformat(),
-            "current_value_cents": current_mrr,
-            "previous_value_cents": previous_mrr,
-            "delta_cents": delta_cents,
-            "delta_percent": delta_percent,
-            "failed_invoice_cents": failed_invoice_cents,
-            "failed_invoice_count": len(failed_invoice_ids),
-            "invoice_ids": failed_invoice_ids,
-        },
-        "affected_accounts": affected_accounts,
-        "support_signals": support_signal_dicts_for_accounts(session, list(accounts)),
-        "product_signals": product_signal_dicts_for_accounts(session, list(accounts)),
-        "support_ticket_ids": ticket_ids_for_accounts(session, list(accounts)),
-        "product_event_names": product_event_names_for_accounts(session, list(accounts)),
-        "source_queries": [
-            "paid invoices joined to subscriptions in current and previous 7-day windows",
-            "failed current-window renewal invoices grouped by account",
-            "support tickets and product events for affected accounts in the last 30 days",
-        ],
-    }
+    failed_invoices = session.scalars(
+        select(Invoice)
+        .join(Subscription, Subscription.id == Invoice.subscription_id)
+        .where(
+            Invoice.account_id.in_(account_ids),
+            Invoice.status == "failed",
+            Invoice.invoice_date >= failed_start,
+            Invoice.invoice_date < current_end_exclusive,
+            Subscription.status == "active",
+        )
+        .order_by(Invoice.account_id, Invoice.id)
+    ).all()
+    failed_by_account: dict[str, list[Invoice]] = {}
+    for invoice in failed_invoices:
+        failed_by_account.setdefault(invoice.account_id, []).append(invoice)
 
     return [
-        Incident(
-            id=incident_id_for_anomaly(anomaly_id),
-            title="Week-over-week paid MRR dropped after failed renewals",
-            status="open",
-            severity="high",
-            anomaly_type=REVENUE_MRR_DROP_ANOMALY_TYPE,
-            metric_name=PAID_INVOICE_MRR_METRIC,
-            summary=(
-                "Paid invoice MRR fell week over week while renewal invoices failed "
-                "for affected accounts."
+        {
+            "account_id": account.id,
+            "account_name": account.name,
+            "segment": account.segment,
+            "health_score": account.health_score,
+            "failed_invoice_cents": sum(
+                invoice.amount_cents for invoice in failed_by_account.get(account.id, [])
             ),
-            source_scenario="checkout_retry_regression",
-            detected_at=DATASET_ANCHOR,
-            current_value_cents=current_mrr,
-            previous_value_cents=previous_mrr,
-            delta_cents=delta_cents,
-            delta_percent=delta_percent,
-            affected_account_ids=list(accounts),
-            evidence=evidence,
-            created_at=DATASET_ANCHOR,
-            updated_at=DATASET_ANCHOR,
-        )
+            "failed_invoice_count": len(failed_by_account.get(account.id, [])),
+            "failed_invoice_ids": [
+                invoice.id for invoice in failed_by_account.get(account.id, [])
+            ],
+            "source_scenario": account.source_scenario,
+        }
+        for account in accounts
     ]
+
+
+def incident_id_for_scenario(scenario: str, anomaly_id: str) -> str:
+    if scenario == "checkout_retry_regression":
+        return incident_id_for_anomaly(anomaly_id)
+    return f"inc_eval_{scenario}"
+
+
+def scenario_incident_title(scenario: str) -> str:
+    titles = {
+        "checkout_retry_regression": "Week-over-week paid MRR dropped after failed renewals",
+        "enterprise_churn_wave": "Enterprise paid MRR at risk after onboarding cancellations",
+        "usage_drop_after_import_outage": "Usage activity dropped after CSV import instability",
+        "support_backlog_export_bug": "Support backlog increased after report export bug",
+        "payment_method_expiration": "Renewal MRR dropped after payment method expirations",
+    }
+    return titles[scenario]
+
+
+def scenario_incident_summary(scenario: str) -> str:
+    summaries = {
+        "checkout_retry_regression": (
+            "Paid invoice MRR fell week over week while renewal invoices failed "
+            "for affected accounts."
+        ),
+        "enterprise_churn_wave": (
+            "Enterprise sponsors canceled or paused renewal after unresolved onboarding "
+            "and procurement escalation risk."
+        ),
+        "usage_drop_after_import_outage": (
+            "Affected accounts show lower recent activity and repeated CSV import failures."
+        ),
+        "support_backlog_export_bug": (
+            "High-priority duplicate product tickets are clustered around report export filters."
+        ),
+        "payment_method_expiration": (
+            "June renewal invoices failed for accounts whose billing owners missed card "
+            "expiration notices."
+        ),
+    }
+    return summaries[scenario]
+
+
+def scenario_source_queries(scenario: str) -> list[str]:
+    common_queries = [
+        "paid invoices joined to subscriptions in current and previous 7-day windows",
+        "support tickets and product events for affected accounts in the last 30 days",
+    ]
+    scenario_queries = {
+        "checkout_retry_regression": [
+            "failed current-window renewal invoices grouped by account",
+            "retry webhook failure reasons on June renewal invoices",
+        ],
+        "enterprise_churn_wave": [
+            "canceled enterprise subscriptions and void June invoices",
+            "procurement escalation tickets mentioning unresolved onboarding risk",
+        ],
+        "usage_drop_after_import_outage": [
+            "import_failed product events grouped by affected account",
+            "integration support tickets mentioning intermittent CSV import failures",
+        ],
+        "support_backlog_export_bug": [
+            "report_export product events grouped by affected account",
+            "open high-priority product tickets mentioning missing export filters",
+        ],
+        "payment_method_expiration": [
+            "failed June renewal invoices grouped by account",
+            "billing tickets mentioning expired cards and missed expiration notices",
+        ],
+    }
+    return common_queries + scenario_queries[scenario]
 
 
 def invoice_sum(session: Session, status: str, start_date: date, end_date: date) -> int:
@@ -780,6 +912,8 @@ def seed_counts(session: Session) -> dict[str, int]:
         "product_events": ProductEvent,
         "support_tickets": SupportTicket,
         "incidents": Incident,
+        "eval_cases": EvalCase,
+        "eval_results": EvalResult,
         "agent_runs": AgentRun,
         "agent_run_steps": AgentRunStep,
         "knowledge_documents": KnowledgeDocument,
