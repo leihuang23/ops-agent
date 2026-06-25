@@ -74,6 +74,9 @@ def test_investigation_run_produces_structured_evidence_backed_report(
     payload = response.json()
     assert payload["incident_id"] == incident_id
     assert payload["status"] == "succeeded"
+    assert payload["trace_id"]
+    assert payload["trace_url"]
+    assert payload["trace_provider"] in {"langfuse", "langsmith", "local"}
     assert payload["final_report"] is not None
 
     report = payload["final_report"]

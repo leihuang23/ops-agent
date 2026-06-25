@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Generator
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date
 import threading
 
 import pytest
@@ -20,6 +21,7 @@ from app.metrics.service import get_dashboard_metrics
 from app.models import (
     Account,
     Invoice,
+    Incident,
     KnowledgeDocument,
     KnowledgeDocumentChunk,
     ProductEvent,
@@ -164,7 +166,9 @@ def test_seed_command_data_is_deterministic(
             "invoices": 600,
             "product_events": 6000,
             "support_tickets": 240,
-            "incidents": 1,
+            "incidents": 5,
+            "eval_cases": 5,
+            "eval_results": 0,
         }
         for table_name, expected_count in expected_domain_counts.items():
             assert first_result.counts[table_name] == expected_count
@@ -504,6 +508,15 @@ def test_each_seeded_scenario_has_concrete_expected_evidence(
                 Invoice.failure_reason.ilike("%Expired cards%"),
             )
         )
+        payment_failure_dates = session.scalars(
+            select(Invoice.invoice_date)
+            .where(
+                Invoice.account_id.in_(payment_accounts),
+                Invoice.status == "failed",
+                Invoice.source_scenario == "payment_method_expiration",
+            )
+            .order_by(Invoice.invoice_date)
+        ).all()
         card_tickets = session.scalar(
             select(func.count())
             .select_from(SupportTicket)
@@ -514,7 +527,18 @@ def test_each_seeded_scenario_has_concrete_expected_evidence(
             )
         )
         assert payment_failures == len(payment_accounts)
+        assert payment_failure_dates
+        assert set(payment_failure_dates) == {date(2026, 6, 1)}
         assert card_tickets and card_tickets > 0
+        payment_incident = session.scalar(
+            select(Incident).where(
+                Incident.source_scenario == "payment_method_expiration"
+            )
+        )
+        assert payment_incident is not None
+        source_queries = payment_incident.evidence["source_queries"]
+        assert any("failed June renewal invoices" in query for query in source_queries)
+        assert not any("failed current-window renewal invoices" in query for query in source_queries)
 
 
 def test_dashboard_metrics_endpoint_returns_seeded_summary(
