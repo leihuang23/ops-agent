@@ -9,6 +9,7 @@ description = "FastAPI backend for the Ops Agent project."
 requires-python = ">=3.12"
 dependencies = [
   "alembic>=1.16,<2",
+  "celery[redis]>=5.5,<6",
   "fastapi[standard]>=0.115,<1",
   "httpx>=0.28,<1",
   "langfuse>=3,<4",

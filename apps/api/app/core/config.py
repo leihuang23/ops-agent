@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     llm_max_tokens: int = Field(default=1024, ge=1, le=4096)
     llm_timeout_seconds: int = Field(default=30, ge=1, le=120)
 
+    # Celery / Redis configuration
+    celery_broker_url: str = "redis://localhost:6379/0"
+    celery_result_backend: str = "redis://localhost:6379/0"
+
     @field_validator("backend_cors_origins", mode="before")
     @classmethod
     def parse_cors_origins(cls, value: str | list[str]) -> list[str]:

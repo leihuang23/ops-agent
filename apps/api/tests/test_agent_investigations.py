@@ -184,7 +184,7 @@ def test_default_investigation_launch_returns_queued_run_then_completes(
             execute_investigation_run_with_session(db, run_id)
 
     monkeypatch.setattr(
-        "app.agent.router.execute_investigation_run",
+        "app.agent.router._enqueue_investigation",
         execute_with_test_session,
     )
 

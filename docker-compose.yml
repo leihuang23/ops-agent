@@ -32,6 +32,8 @@ services:
       APP_ENV: ${APP_ENV:-demo}
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://ops_agent:ops_agent@postgres:5432/ops_agent}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
       BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS:-http://localhost:3000}
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-local}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-local-hashing-v1}
@@ -42,7 +44,7 @@ services:
       OBSERVABILITY_FULL_PAYLOADS: ${OBSERVABILITY_FULL_PAYLOADS:-false}
       OBSERVABILITY_TIMEOUT_SECONDS: ${OBSERVABILITY_TIMEOUT_SECONDS:-2}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
-      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGSMITH_SECRET_KEY:-}
       LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-https://cloud.langfuse.com}
       LANGFUSE_PROJECT_ID: ${LANGFUSE_PROJECT_ID:-}
       LANGSMITH_TRACING: ${LANGSMITH_TRACING:-false}
@@ -52,6 +54,37 @@ services:
       LANGSMITH_WEB_URL: ${LANGSMITH_WEB_URL:-https://smith.langchain.com}
     ports:
       - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ./apps/api
+    command: ["./entrypoint.sh", "worker"]
+    environment:
+      APP_ENV: ${APP_ENV:-demo}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://ops_agent:ops_agent@postgres:5432/ops_agent}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-local}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-local-hashing-v1}
+      DEMO_OPERATOR_TOKEN: ${DEMO_OPERATOR_TOKEN:-}
+      OBSERVABILITY_PROVIDER: ${OBSERVABILITY_PROVIDER:-auto}
+      OBSERVABILITY_FULL_PAYLOADS: ${OBSERVABILITY_FULL_PAYLOADS:-false}
+      OBSERVABILITY_TIMEOUT_SECONDS: ${OBSERVABILITY_TIMEOUT_SECONDS:-2}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGSMITH_SECRET_KEY:-}
+      LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-https://cloud.langfuse.com}
+      LANGFUSE_PROJECT_ID: ${LANGFUSE_PROJECT_ID:-}
+      LANGSMITH_TRACING: ${LANGSMITH_TRACING:-false}
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+      LANGSMITH_ENDPOINT: ${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
+      LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-ops-agent-local}
+      LANGSMITH_WEB_URL: ${LANGSMITH_WEB_URL:-https://smith.langchain.com}
     depends_on:
       postgres:
         condition: service_healthy

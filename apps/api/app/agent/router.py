@@ -1,17 +1,18 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
 from app.agent.schemas import AgentInvestigationCreate, AgentRunDetail, AgentRunSummary
 from app.agent.service import (
     create_investigation_run,
-    execute_investigation_run,
     get_run_detail,
     list_agent_runs,
     start_investigation_run,
 )
+from app.agent.tasks import investigate_incident
 from app.core.access import require_demo_data_access, require_demo_operator_access
+from app.core.config import get_settings
 from app.db.session import get_db
 
 router = APIRouter(
@@ -21,11 +22,18 @@ router = APIRouter(
 )
 
 
+def _enqueue_investigation(run_id: str) -> None:
+    settings = get_settings()
+    if settings.app_env == "test":
+        investigate_incident.run(run_id)
+    else:
+        investigate_incident.delay(run_id)
+
+
 @router.post("/investigations")
 def start_investigation(
     payload: AgentInvestigationCreate,
     response: Response,
-    background_tasks: BackgroundTasks,
     _operator: None = Depends(require_demo_operator_access),
     db: Session = Depends(get_db),
 ) -> AgentRunDetail:
@@ -39,7 +47,7 @@ def start_investigation(
                 db, payload.incident_id, force=payload.force
             )
             if created:
-                background_tasks.add_task(execute_investigation_run, run.id)
+                _enqueue_investigation(run.id)
     except LookupError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
