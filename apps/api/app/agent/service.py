@@ -9,7 +9,12 @@ from sqlalchemy.orm import Session
 
 from app.agent.persistence import AgentRunRecorder
 from app.agent.persistence import utcnow_naive
-from app.agent.schemas import AgentRunDetail, AgentRunStepRead, InvestigationReport
+from app.agent.schemas import (
+    AgentRunDetail,
+    AgentRunStepRead,
+    AgentRunSummary,
+    InvestigationReport,
+)
 from app.agent.tracing import AgentTraceHandle, start_agent_trace
 from app.agent.workflow import run_investigation_workflow
 from app.approvals.service import list_mock_actions_for_run, propose_actions_for_report
@@ -242,6 +247,32 @@ def _propose_report_actions(
         },
         action=propose,
     )
+
+
+def list_agent_runs(session: Session, *, limit: int = 100) -> list[AgentRunSummary]:
+    runs = session.scalars(
+        select(AgentRun).order_by(AgentRun.created_at.desc()).limit(limit)
+    ).all()
+    return [
+        AgentRunSummary(
+            id=run.id,
+            incident_id=run.incident_id,
+            status=run.status,  # type: ignore[arg-type]
+            trace_id=run.trace_id,
+            trace_url=run.trace_url,
+            trace_provider=run.trace_provider,
+            token_estimate=run.token_estimate,
+            prompt_tokens=run.prompt_tokens,
+            completion_tokens=run.completion_tokens,
+            cost_estimate_usd=run.cost_estimate_usd,
+            error=run.error,
+            started_at=run.started_at,
+            completed_at=run.completed_at,
+            created_at=run.created_at,
+            updated_at=run.updated_at,
+        )
+        for run in runs
+    ]
 
 
 def get_run_detail(session: Session, run_id: str) -> AgentRunDetail:

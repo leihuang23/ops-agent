@@ -916,3 +916,42 @@ def sample_report() -> InvestigationReport:
         next_actions=["Send an approval-gated status update draft to affected admins."],
         generated_at=datetime(2026, 6, 9, 12, 35, 0),
     )
+
+
+def test_list_agent_runs_returns_runs_sorted_by_created_desc(
+    session_factory: Callable[[], Session],
+) -> None:
+    with session_factory() as session:
+        reseed_database(session)
+        incident_id = session.scalar(select(Incident.id))
+        assert incident_id is not None
+
+    def override_get_db() -> Generator[Session, None, None]:
+        with session_factory() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+    client = TestClient(app)
+    try:
+        first = client.post(
+            "/agent/investigations",
+            json={"incident_id": incident_id, "run_inline": True},
+        )
+        second = client.post(
+            "/agent/investigations",
+            json={"incident_id": incident_id, "run_inline": True, "force": True},
+        )
+        list_response = client.get("/agent/runs")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert list_response.status_code == 200
+    runs = list_response.json()
+    assert len(runs) >= 2
+    assert all("incident_id" in run for run in runs)
+    assert all("status" in run for run in runs)
+    assert all("created_at" in run for run in runs)
+    created_at_values = [run["created_at"] for run in runs]
+    assert created_at_values == sorted(created_at_values, reverse=True)

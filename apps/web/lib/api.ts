@@ -319,6 +319,24 @@ export type AgentRunStep = {
   completed_at: string | null;
 };
 
+export type AgentRunSummary = {
+  id: string;
+  incident_id: string;
+  status: 'queued' | 'running' | 'succeeded' | 'failed';
+  trace_id: string | null;
+  trace_url: string | null;
+  trace_provider: 'langfuse' | 'langsmith' | 'local' | null;
+  token_estimate: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cost_estimate_usd: number;
+  error: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type AgentRunDetail = {
   id: string;
   incident_id: string;
@@ -349,6 +367,10 @@ export type StartInvestigationResult =
 
 export type AgentRunDetailResult =
   | { ok: true; data: AgentRunDetail }
+  | { ok: false; error: string };
+
+export type AgentRunListResult =
+  | { ok: true; data: AgentRunSummary[] }
   | { ok: false; error: string };
 
 export type EvalStatus = 'passed' | 'failed';
@@ -611,6 +633,34 @@ export async function startInvestigation(
     return {
       ok: false,
       error: error instanceof Error ? error.message : 'Investigation start unavailable',
+    };
+  }
+}
+
+export async function listAgentRuns(): Promise<AgentRunListResult> {
+  try {
+    const response = await fetch(`${resolveApiBaseUrl()}/agent/runs`, {
+      cache: 'no-store',
+    });
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        error: await readErrorMessage(
+          response,
+          `Agent runs endpoint returned HTTP ${response.status}`,
+        ),
+      };
+    }
+
+    return {
+      ok: true,
+      data: (await response.json()) as AgentRunSummary[],
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : 'Agent runs endpoint unavailable',
     };
   }
 }

@@ -3,11 +3,12 @@ from __future__ import annotations
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
-from app.agent.schemas import AgentInvestigationCreate, AgentRunDetail
+from app.agent.schemas import AgentInvestigationCreate, AgentRunDetail, AgentRunSummary
 from app.agent.service import (
     create_investigation_run,
     execute_investigation_run,
     get_run_detail,
+    list_agent_runs,
     start_investigation_run,
 )
 from app.core.access import require_demo_data_access, require_demo_operator_access
@@ -47,6 +48,11 @@ def start_investigation(
 
     response.status_code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
     return run
+
+
+@router.get("/runs")
+def agent_runs(db: Session = Depends(get_db)) -> list[AgentRunSummary]:
+    return list_agent_runs(db)
 
 
 @router.get("/runs/{run_id}")

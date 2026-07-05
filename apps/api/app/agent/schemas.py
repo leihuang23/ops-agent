@@ -64,6 +64,24 @@ class AgentRunStepRead(BaseModel):
     completed_at: datetime | None
 
 
+class AgentRunSummary(BaseModel):
+    id: str
+    incident_id: str
+    status: Literal["queued", "running", "succeeded", "failed"]
+    trace_id: str | None
+    trace_url: str | None
+    trace_provider: str | None
+    token_estimate: int
+    prompt_tokens: int
+    completion_tokens: int
+    cost_estimate_usd: float
+    error: str | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
 class AgentRunDetail(BaseModel):
     id: str
     incident_id: str
