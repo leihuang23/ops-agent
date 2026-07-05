@@ -12,6 +12,7 @@ class AgentInvestigationCreate(BaseModel):
     incident_id: str = Field(min_length=1, max_length=64)
     force: bool = False
     run_inline: bool = False
+    idempotency_key: str | None = Field(default=None, max_length=128)
 
 
 class ReportAffectedAccount(BaseModel):

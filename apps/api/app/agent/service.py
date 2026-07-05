@@ -18,6 +18,7 @@ from app.agent.schemas import (
 from app.agent.tracing import AgentTraceHandle, start_agent_trace
 from app.agent.workflow import run_investigation_workflow
 from app.approvals.service import list_mock_actions_for_run, propose_actions_for_report
+from app.cache import Cache
 from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.llm import AnthropicClient, LLMClient, NoopLLMClient, OpenAIClient
@@ -52,14 +53,29 @@ def build_llm_client_from_settings() -> LLMClient:
     return NoopLLMClient()
 
 
+IDEMPOTENCY_CACHE_TTL_SECONDS = 3600
+
+
 def create_investigation_run(
-    session: Session, incident_id: str, *, force: bool = False
+    session: Session,
+    incident_id: str,
+    *,
+    force: bool = False,
+    idempotency_key: str | None = None,
 ) -> tuple[AgentRunDetail, bool]:
     incident = session.get(Incident, incident_id)
     if incident is None:
         raise LookupError(f"Unknown incident id: {incident_id}")
 
     _abandon_orphaned_runs(session, incident_id)
+
+    if idempotency_key:
+        cache = Cache()
+        existing_run_id = cache.get_idempotency_value(idempotency_key)
+        if existing_run_id:
+            existing_run = session.get(AgentRun, existing_run_id)
+            if existing_run is not None:
+                return get_run_detail(session, existing_run_id), False
 
     if not force:
         reusable_run_id = _latest_reusable_run_id(session, incident_id)
@@ -98,6 +114,13 @@ def create_investigation_run(
         if reusable_run_id is None:
             raise
         return get_run_detail(session, reusable_run_id), False
+
+    if idempotency_key:
+        cache = Cache()
+        cache.set_idempotency_value(
+            idempotency_key, run.id, IDEMPOTENCY_CACHE_TTL_SECONDS
+        )
+
     return get_run_detail(session, run.id), True
 
 
@@ -152,6 +175,7 @@ def execute_investigation_run_with_session(
         return get_run_detail(session, run_id)
     session.commit()
     session.refresh(run)
+    _invalidate_run_detail_cache(run_id)
 
     llm_client = build_llm_client_from_settings()
     try:
@@ -170,6 +194,7 @@ def execute_investigation_run_with_session(
         failed_run.completed_at = completed_at
         failed_run.updated_at = completed_at
         session.commit()
+        _invalidate_run_detail_cache(failed_run.id)
         return get_run_detail(session, failed_run.id)
 
     completed_at = utcnow_naive()
@@ -184,6 +209,7 @@ def execute_investigation_run_with_session(
             if finished_run.status == "failed"
             else None,
         )
+        _invalidate_run_detail_cache(finished_run.id)
         return get_run_detail(session, finished_run.id)
     finished_run.status = "succeeded"
     finished_run.error = None
@@ -204,6 +230,7 @@ def execute_investigation_run_with_session(
         failed_run.updated_at = completed_at
         _finish_trace(trace, outputs=failed_run.final_report, error=failed_run.error)
         session.commit()
+        _invalidate_run_detail_cache(failed_run.id)
         return get_run_detail(session, failed_run.id)
 
     finished_run = session.get(AgentRun, run.id)
@@ -215,6 +242,7 @@ def execute_investigation_run_with_session(
     finished_run.updated_at = completed_at
     _finish_trace(trace, outputs=finished_run.final_report)
     session.commit()
+    _invalidate_run_detail_cache(finished_run.id)
 
     return get_run_detail(session, finished_run.id)
 
@@ -275,7 +303,28 @@ def list_agent_runs(session: Session, *, limit: int = 100) -> list[AgentRunSumma
     ]
 
 
+RUN_DETAIL_CACHE_TTL_SECONDS = 10
+
+
+def _run_detail_cache_key(run_id: str) -> str:
+    return f"agent:run:{run_id}"
+
+
+def _serialize_run_detail(detail: AgentRunDetail) -> dict[str, object]:
+    return detail.model_dump(mode="json")
+
+
+def _invalidate_run_detail_cache(run_id: str) -> None:
+    Cache().delete(_run_detail_cache_key(run_id))
+
+
 def get_run_detail(session: Session, run_id: str) -> AgentRunDetail:
+    cache = Cache()
+    cache_key = _run_detail_cache_key(run_id)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return AgentRunDetail.model_validate(cached)
+
     run = session.get(AgentRun, run_id)
     if run is None:
         raise LookupError(f"Unknown agent run id: {run_id}")
@@ -287,7 +336,7 @@ def get_run_detail(session: Session, run_id: str) -> AgentRunDetail:
         .order_by(AgentRunStep.sequence)
     ).all()
 
-    return AgentRunDetail(
+    detail = AgentRunDetail(
         id=run.id,
         incident_id=run.incident_id,
         status=run.status,
@@ -327,6 +376,8 @@ def get_run_detail(session: Session, run_id: str) -> AgentRunDetail:
         ],
         mock_actions=list_mock_actions_for_run(session, run.id),
     )
+    cache.set(cache_key, _serialize_run_detail(detail), RUN_DETAIL_CACHE_TTL_SECONDS)
+    return detail
 
 
 def _abandon_orphaned_runs(session: Session, incident_id: str) -> None:

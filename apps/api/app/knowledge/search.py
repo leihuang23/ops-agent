@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from app.cache import Cache
 from app.db.types import vector_literal
 from app.knowledge.embeddings import cosine_similarity, embed_text, tokenize
 from app.models import KnowledgeDocument, KnowledgeDocumentChunk
@@ -21,6 +22,15 @@ class KnowledgeSearchResult:
     citation: dict[str, Any]
 
 
+DASHBOARD_CACHE_TTL_SECONDS = 60
+KNOWLEDGE_CACHE_TTL_SECONDS = 300
+
+
+def _search_knowledge_cache_key(query: str, limit: int) -> str:
+    normalized = re.sub(r"\s+", " ", query.strip()).lower()
+    return f"knowledge:search:{normalized}:{limit}"
+
+
 def search_knowledge(
     session: Session, query: str, *, limit: int = 6
 ) -> list[KnowledgeSearchResult]:
@@ -28,10 +38,44 @@ def search_knowledge(
     if not query:
         return []
 
+    cache = Cache()
+    cache_key = _search_knowledge_cache_key(query, limit)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return [
+            KnowledgeSearchResult(
+                source_id=str(item["source_id"]),
+                title=str(item["title"]),
+                snippet=str(item["snippet"]),
+                score=float(item["score"]),
+                citation=dict(item["citation"]),
+            )
+            for item in cached["results"]
+        ]
+
     query_embedding = embed_text(query)
     if session.get_bind().dialect.name == "postgresql":
-        return search_postgres(session, query, query_embedding, limit=limit)
-    return search_in_memory(session, query, query_embedding, limit=limit)
+        results = search_postgres(session, query, query_embedding, limit=limit)
+    else:
+        results = search_in_memory(session, query, query_embedding, limit=limit)
+
+    cache.set(
+        cache_key,
+        {
+            "results": [
+                {
+                    "source_id": result.source_id,
+                    "title": result.title,
+                    "snippet": result.snippet,
+                    "score": result.score,
+                    "citation": result.citation,
+                }
+                for result in results
+            ]
+        },
+        KNOWLEDGE_CACHE_TTL_SECONDS,
+    )
+    return results
 
 
 def search_postgres(

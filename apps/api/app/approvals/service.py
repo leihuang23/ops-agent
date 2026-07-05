@@ -17,6 +17,7 @@ from app.approvals.schemas import (
     MockActionRead,
     RiskLevel,
 )
+from app.cache import Cache
 from app.models import ActionAuditEvent, AgentRun, ApprovalRequest, MockAction
 
 HIGH_RISK_ACTION_TYPES = {"draft_customer_email", "update_account_note"}
@@ -283,6 +284,7 @@ def approve_request(
         created_at=now,
     )
     session.commit()
+    _invalidate_run_detail_cache(approval.run_id)
     return get_approval_request(session, approval_id)
 
 
@@ -316,7 +318,12 @@ def reject_request(
         created_at=now,
     )
     session.commit()
+    _invalidate_run_detail_cache(approval.run_id)
     return get_approval_request(session, approval_id)
+
+
+def _invalidate_run_detail_cache(run_id: str) -> None:
+    Cache().delete(f"agent:run:{run_id}")
 
 
 def get_approval_request(session: Session, approval_id: str) -> ApprovalRequestRead:

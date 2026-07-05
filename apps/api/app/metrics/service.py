@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.cache import cache_result
 from app.models import Account, Invoice, ProductEvent, Subscription, SupportTicket
 from app.seed import DATASET_ANCHOR
 
@@ -271,7 +272,7 @@ def get_active_user_metrics(
     )
 
 
-def get_dashboard_metrics(session: Session) -> DashboardMetrics:
+def _build_dashboard_metrics(session: Session) -> DashboardMetrics:
     anchor = get_dataset_anchor(session)
     return DashboardMetrics(
         as_of=anchor,
@@ -281,3 +282,13 @@ def get_dashboard_metrics(session: Session) -> DashboardMetrics:
         ticket_volume=get_ticket_volume_metrics(session, anchor),
         active_users=get_active_user_metrics(session, anchor),
     )
+
+
+@cache_result(
+    key="metrics:dashboard",
+    ttl_seconds=60,
+    dump=lambda metrics: metrics.model_dump(mode="json"),
+    load=DashboardMetrics.model_validate,
+)
+def get_dashboard_metrics(session: Session) -> DashboardMetrics:
+    return _build_dashboard_metrics(session)

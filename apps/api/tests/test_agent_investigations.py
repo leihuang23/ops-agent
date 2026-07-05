@@ -955,3 +955,54 @@ def test_list_agent_runs_returns_runs_sorted_by_created_desc(
     assert all("created_at" in run for run in runs)
     created_at_values = [run["created_at"] for run in runs]
     assert created_at_values == sorted(created_at_values, reverse=True)
+
+
+def test_investigation_create_respects_idempotency_key(
+    session_factory: Callable[[], Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with session_factory() as session:
+        reseed_database(session)
+        incident_id = session.scalar(select(Incident.id))
+
+    assert incident_id is not None
+
+    def override_get_db() -> Generator[Session, None, None]:
+        with session_factory() as db:
+            yield db
+
+    def execute_with_test_session(run_id: str) -> None:
+        from app.agent.service import execute_investigation_run_with_session
+
+        with session_factory() as db:
+            execute_investigation_run_with_session(db, run_id)
+
+    monkeypatch.setattr(
+        "app.agent.router._enqueue_investigation",
+        execute_with_test_session,
+    )
+
+    app.dependency_overrides[get_db] = override_get_db
+    client = TestClient(app)
+    idempotency_key = "idem-test-1"
+    try:
+        first = client.post(
+            "/agent/investigations",
+            json={
+                "incident_id": incident_id,
+                "idempotency_key": idempotency_key,
+            },
+        )
+        second = client.post(
+            "/agent/investigations",
+            json={
+                "incident_id": incident_id,
+                "idempotency_key": idempotency_key,
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert first.status_code == 201
+    assert second.status_code == 200
+    assert first.json()["id"] == second.json()["id"]
