@@ -33,6 +33,15 @@ class Settings(BaseSettings):
     langsmith_project: str = "ops-agent-local"
     langsmith_web_url: str = "https://smith.langchain.com"
 
+    # LLM configuration
+    llm_provider: Literal["none", "openai", "anthropic"] = "none"
+    llm_model: str = "gpt-4o-mini"
+    openai_api_key: str | None = None
+    anthropic_api_key: str | None = None
+    llm_temperature: float = Field(default=0.1, ge=0.0, le=2.0)
+    llm_max_tokens: int = Field(default=1024, ge=1, le=4096)
+    llm_timeout_seconds: int = Field(default=30, ge=1, le=120)
+
     @field_validator("backend_cors_origins", mode="before")
     @classmethod
     def parse_cors_origins(cls, value: str | list[str]) -> list[str]:
@@ -48,6 +57,8 @@ class Settings(BaseSettings):
         "langfuse_secret_key",
         "langfuse_project_id",
         "langsmith_api_key",
+        "openai_api_key",
+        "anthropic_api_key",
         mode="before",
     )
     @classmethod

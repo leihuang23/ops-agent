@@ -14,11 +14,38 @@ from app.agent.schemas import AgentRunDetail, AgentRunStepRead, InvestigationRep
 from app.agent.tracing import AgentTraceHandle, start_agent_trace
 from app.agent.workflow import run_investigation_workflow
 from app.approvals.service import list_mock_actions_for_run, propose_actions_for_report
+from app.core.config import get_settings
 from app.db.session import SessionLocal
+from app.llm import AnthropicClient, LLMClient, NoopLLMClient, OpenAIClient
 from app.models import AgentRun, AgentRunStep, Incident
 
 ACTIVE_RUN_STALE_AFTER = timedelta(minutes=10)
 ACTIVE_RUN_STATUSES = ("queued", "running")
+
+
+def build_llm_client_from_settings() -> LLMClient:
+    settings = get_settings()
+    if settings.llm_provider == "openai":
+        if not settings.openai_api_key:
+            return NoopLLMClient()
+        return OpenAIClient(
+            api_key=settings.openai_api_key,
+            model=settings.llm_model,
+            temperature=settings.llm_temperature,
+            max_tokens=settings.llm_max_tokens,
+            timeout_seconds=settings.llm_timeout_seconds,
+        )
+    if settings.llm_provider == "anthropic":
+        if not settings.anthropic_api_key:
+            return NoopLLMClient()
+        return AnthropicClient(
+            api_key=settings.anthropic_api_key,
+            model=settings.llm_model,
+            temperature=settings.llm_temperature,
+            max_tokens=settings.llm_max_tokens,
+            timeout_seconds=settings.llm_timeout_seconds,
+        )
+    return NoopLLMClient()
 
 
 def create_investigation_run(
@@ -122,8 +149,9 @@ def execute_investigation_run_with_session(
     session.commit()
     session.refresh(run)
 
+    llm_client = build_llm_client_from_settings()
     try:
-        report = run_investigation_workflow(session, run, trace)
+        report = run_investigation_workflow(session, run, trace, llm_client=llm_client)
     except Exception as exc:
         _finish_trace(trace, error=str(exc))
         session.rollback()

@@ -15,6 +15,12 @@ from app.agent.schemas import (
     ReportClaim,
     ReportEvidence,
 )
+from app.llm import (
+    LLMClient,
+    NoopLLMClient,
+    build_investigation_prompt,
+)
+from app.llm.schemas import LLMUsage
 from app.agent.tools import (
     FetchAccountDetailsInput,
     FetchSupportTicketsInput,
@@ -49,7 +55,10 @@ class Diagnosis:
 
 
 def run_investigation_workflow(
-    session: Session, run: AgentRun, trace: AgentTraceHandle | None = None
+    session: Session,
+    run: AgentRun,
+    trace: AgentTraceHandle | None = None,
+    llm_client: LLMClient | None = None,
 ) -> InvestigationReport:
     recorder = AgentRunRecorder(session, run, trace)
     builder = StateGraph(InvestigationState)
@@ -191,7 +200,11 @@ def run_investigation_workflow(
                     "support_tickets",
                 ],
             },
-            action=lambda: _synthesize_report(state).model_dump(mode="json"),
+            action=lambda: _synthesize_report(
+                state,
+                llm_client=llm_client or NoopLLMClient(),
+                run=recorder.run,
+            ).model_dump(mode="json"),
         )
         return {"final_report": report}
 
@@ -214,19 +227,31 @@ def run_investigation_workflow(
     return InvestigationReport.model_validate(final_state["final_report"])
 
 
-def _synthesize_report(state: InvestigationState) -> InvestigationReport:
+def _synthesize_report(
+    state: InvestigationState, *, llm_client: LLMClient, run: AgentRun
+) -> InvestigationReport:
     incident = state["incident"]
     revenue_metrics = state["revenue_metrics"]
     account_details = state["account_details"]
     doc_results = state["doc_results"]
     support_tickets = state["support_tickets"]
 
-    diagnosis = _diagnose_from_evidence(
+    diagnosis, llm_usage = diagnose_with_llm_or_fallback(
+        llm_client=llm_client,
+        incident=incident,
         revenue_metrics=revenue_metrics,
         account_details=account_details,
         doc_results=doc_results,
         support_tickets=support_tickets,
     )
+    run.trace_metadata = {
+        **run.trace_metadata,
+        "llm_provider": llm_usage.provider,
+        "llm_model": llm_usage.model,
+        "llm_latency_ms": llm_usage.latency_ms,
+        "llm_used": llm_usage.used_llm,
+        "llm_fallback_reason": llm_usage.fallback_reason,
+    }
 
     tickets_by_account: dict[str, list[dict[str, Any]]] = {}
     for ticket in support_tickets["tickets"]:
@@ -460,6 +485,64 @@ def _hypotheses_for_incident(incident: dict[str, Any]) -> list[str]:
         "Product disruption or support backlog is a contributing factor rather than the primary revenue cause.",
     ]
     return hypotheses
+
+
+def diagnose_with_llm_or_fallback(
+    *,
+    llm_client: LLMClient,
+    incident: dict[str, Any],
+    revenue_metrics: dict[str, Any],
+    account_details: dict[str, Any],
+    doc_results: dict[str, Any],
+    support_tickets: dict[str, Any],
+) -> tuple[Diagnosis, LLMUsage]:
+    prompt = build_investigation_prompt(
+        incident=incident,
+        revenue_metrics=revenue_metrics,
+        account_details=account_details,
+        doc_results=doc_results,
+        support_tickets=support_tickets,
+    )
+    try:
+        llm_response, usage = llm_client.complete(prompt)
+    except Exception as exc:
+        usage = LLMUsage(
+            provider=getattr(llm_client, "provider", "unknown"),
+            model=getattr(llm_client, "model", "unknown"),
+            used_llm=False,
+            fallback_reason=f"llm_error: {exc}",
+        )
+        return _diagnose_from_evidence(
+            revenue_metrics=revenue_metrics,
+            account_details=account_details,
+            doc_results=doc_results,
+            support_tickets=support_tickets,
+        ), usage
+
+    if not llm_response.root_cause or llm_response.root_cause.strip().lower().startswith(
+        "llm is disabled"
+    ):
+        return _diagnose_from_evidence(
+            revenue_metrics=revenue_metrics,
+            account_details=account_details,
+            doc_results=doc_results,
+            support_tickets=support_tickets,
+        ), usage
+
+    diagnosis = Diagnosis(
+        root_cause=llm_response.root_cause,
+        next_actions=llm_response.next_actions or _fallback_next_actions(),
+        is_specific=llm_response.confidence in {"medium", "high"},
+    )
+    return diagnosis, usage
+
+
+def _fallback_next_actions() -> list[str]:
+    return [
+        "Collect additional account, support, and product evidence before naming a root cause.",
+        "Review failed invoice rows and support tickets for affected accounts.",
+        "Keep any customer follow-up in approval-gated drafts.",
+    ]
 
 
 def _diagnose_from_evidence(

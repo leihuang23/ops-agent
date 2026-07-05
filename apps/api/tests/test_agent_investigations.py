@@ -280,7 +280,7 @@ def test_abandoned_run_is_not_resurrected_when_workflow_completes(
         assert incident_id is not None
 
     def workflow_abandoned_before_completion(
-        session: Session, run: AgentRun, trace: object | None = None
+        session: Session, run: AgentRun, trace: object | None = None, **_kwargs: object
     ) -> InvestigationReport:
         abandoned_run = session.get(AgentRun, run.id)
         assert abandoned_run is not None
