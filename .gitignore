@@ -20,6 +20,11 @@ node_modules/
 out/
 *.tsbuildinfo
 
+# Playwright
+test-results/
+playwright-report/
+playwright/.cache/
+
 *.pyc
 *.pyo
 *.pyd

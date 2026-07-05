@@ -31,7 +31,7 @@ export async function startInvestigationFromIncident(formData: FormData) {
   }
 
   const encodedIncidentId = encodeURIComponent(incidentId);
-  const run = await startInvestigation(incidentId);
+  const run = await startInvestigation(incidentId, { runInline: true });
   if (!run.ok) {
     redirect(`/incidents/${encodedIncidentId}?investigation_error=${encodeURIComponent(run.error)}`);
   }

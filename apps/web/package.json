@@ -11,7 +11,9 @@
     "build": "next build --webpack",
     "start": "next start",
     "lint": "next typegen && tsc --noEmit",
-    "test": "node --experimental-strip-types --test lib/resolveApiBaseUrl.test.ts app/reviewerFlowSmoke.test.ts"
+    "test": "node --experimental-strip-types --test lib/resolveApiBaseUrl.test.ts app/reviewerFlowSmoke.test.ts",
+    "test:e2e": "playwright test",
+    "test:e2e:ci": "playwright test --reporter=dot"
   },
   "dependencies": {
     "next": "^16.0.0",
@@ -22,9 +24,11 @@
     "postcss": "^8.5.10"
   },
   "devDependencies": {
+    "@playwright/test": "^1.49.0",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "playwright": "^1.49.0",
     "typescript": "^5.8.0"
   }
 }
