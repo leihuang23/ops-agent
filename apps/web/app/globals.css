@@ -41,6 +41,57 @@ select {
   font: inherit;
 }
 
+.global-nav {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.global-nav-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: min(1440px, 100%);
+  margin: 0 auto;
+  padding: 12px 28px;
+}
+
+.global-nav-brand {
+  color: var(--foreground);
+  font-size: 18px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.global-nav-list {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.global-nav-list a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  color: var(--ink-soft);
+  font-size: 14px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.global-nav-list a:hover {
+  background: var(--panel-soft);
+  color: var(--foreground);
+}
+
 .dashboard-shell {
   width: min(1440px, 100%);
   margin: 0 auto;

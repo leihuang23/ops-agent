@@ -11,12 +11,16 @@ function readWorkspaceFile(path: string) {
 
 test('dashboard page exposes anomaly and navigation review surfaces', () => {
   const source = readWorkspaceFile('app/page.tsx');
+  const nav = readWorkspaceFile('app/Nav.tsx');
 
   assert.match(source, /Detected revenue anomalies/);
   assert.match(source, /Recent failed invoices/);
   assert.match(source, /Ticket volume by category/);
-  assert.match(source, /href="\/evals"/);
-  assert.match(source, /href="\/knowledge"/);
+  assert.match(nav, /href[:=]\s*['"]\/incidents['"]/);
+  assert.match(nav, /href[:=]\s*['"]\/agent\/runs['"]/);
+  assert.match(nav, /href[:=]\s*['"]\/approvals['"]/);
+  assert.match(nav, /href[:=]\s*['"]\/knowledge['"]/);
+  assert.match(nav, /href[:=]\s*['"]\/evals['"]/);
 });
 
 test('incident page exposes evidence needed before launching an investigation', () => {
