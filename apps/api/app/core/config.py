@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_format: Literal["json", "text"] = "text"
 
+    # Rate limiting configuration
+    rate_limit_mutations_per_minute: int = Field(default=1000, ge=1)
+    rate_limit_search_per_minute: int = Field(default=1000, ge=1)
+
     @field_validator("backend_cors_origins", mode="before")
     @classmethod
     def parse_cors_origins(cls, value: str | list[str]) -> list[str]:

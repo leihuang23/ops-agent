@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 
 from app.agent.schemas import AgentInvestigationCreate, AgentRunDetail, AgentRunSummary
@@ -13,6 +13,7 @@ from app.agent.service import (
 from app.agent.tasks import investigate_incident
 from app.core.access import require_demo_data_access, require_demo_operator_access
 from app.core.config import get_settings
+from app.core.limiter import limiter
 from app.db.session import get_db
 
 router = APIRouter(
@@ -20,6 +21,8 @@ router = APIRouter(
     tags=["agent"],
     dependencies=[Depends(require_demo_data_access)],
 )
+
+_settings = get_settings()
 
 
 def _enqueue_investigation(run_id: str) -> None:
@@ -31,7 +34,9 @@ def _enqueue_investigation(run_id: str) -> None:
 
 
 @router.post("/investigations")
+@limiter.limit(f"{_settings.rate_limit_mutations_per_minute}/minute")
 def start_investigation(
+    request: Request,
     payload: AgentInvestigationCreate,
     response: Response,
     _operator: None = Depends(require_demo_operator_access),

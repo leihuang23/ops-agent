@@ -3,11 +3,14 @@ from contextvars import ContextVar
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from app.accounts.router import router as accounts_router
 from app.agent.router import router as agent_router
 from app.approvals.router import approvals_router, mock_actions_router
 from app.core.config import get_settings
+from app.core.limiter import limiter
 from app.evals.router import router as evals_router
 from app.health.router import router as health_router
 from app.incidents.router import router as incidents_router
@@ -23,6 +26,7 @@ def create_app() -> FastAPI:
     settings = get_settings()
     configure_logging(settings)
     app = FastAPI(title=settings.app_name, version=settings.app_version)
+    app.state.limiter = limiter
 
     app.add_middleware(
         CORSMiddleware,
@@ -31,6 +35,18 @@ def create_app() -> FastAPI:
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["*"],
     )
+    app.add_middleware(SlowAPIMiddleware)
+
+    @app.exception_handler(RateLimitExceeded)
+    async def rate_limit_handler(request: Request, exc: RateLimitExceeded) -> Response:
+        retry_after = getattr(exc, "retry_after", None)
+        headers = {"Retry-After": str(retry_after)} if retry_after else {}
+        return Response(
+            content='{"detail":"Rate limit exceeded"}',
+            status_code=429,
+            media_type="application/json",
+            headers=headers,
+        )
 
     @app.middleware("http")
     async def request_id_middleware(request: Request, call_next):

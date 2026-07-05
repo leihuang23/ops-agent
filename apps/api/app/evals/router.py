@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import secrets
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 
 from app.core.access import require_demo_data_access
 from app.core.config import get_settings
+from app.core.limiter import limiter
 from app.db.session import get_db
 from app.evals.runner import list_latest_eval_results, run_eval_suite
 from app.evals.schemas import EvalResultsReport, EvalRunSummary
+
+_settings = get_settings()
 
 router = APIRouter(
     prefix="/evals",
@@ -40,7 +43,12 @@ def require_eval_run_access(
 
 
 @router.post("/run", dependencies=[Depends(require_eval_run_access)])
-def run_evals(response: Response, db: Session = Depends(get_db)) -> EvalRunSummary:
+@limiter.limit(f"{_settings.rate_limit_mutations_per_minute}/minute")
+def run_evals(
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+) -> EvalRunSummary:
     summary = run_eval_suite(db)
     response.status_code = status.HTTP_201_CREATED
     return summary

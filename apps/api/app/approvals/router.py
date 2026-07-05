@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.approvals.schemas import (
@@ -17,7 +17,11 @@ from app.approvals.service import (
     reject_request,
 )
 from app.core.access import require_demo_data_access, require_demo_operator_access
+from app.core.config import get_settings
+from app.core.limiter import limiter
 from app.db.session import get_db
+
+_settings = get_settings()
 
 mock_actions_router = APIRouter(
     prefix="/mock-actions",
@@ -36,7 +40,9 @@ approvals_router = APIRouter(
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_demo_operator_access)],
 )
+@limiter.limit(f"{_settings.rate_limit_mutations_per_minute}/minute")
 def propose_mock_action(
+    request: Request,
     payload: MockActionCreate,
     db: Session = Depends(get_db),
 ) -> MockActionRead:
@@ -66,7 +72,9 @@ def approval_queue(
     "/{approval_id}/approve",
     dependencies=[Depends(require_demo_operator_access)],
 )
+@limiter.limit(f"{_settings.rate_limit_mutations_per_minute}/minute")
 def approve(
+    request: Request,
     approval_id: str,
     payload: ApprovalDecisionCreate,
     db: Session = Depends(get_db),
@@ -86,7 +94,9 @@ def approve(
     "/{approval_id}/reject",
     dependencies=[Depends(require_demo_operator_access)],
 )
+@limiter.limit(f"{_settings.rate_limit_mutations_per_minute}/minute")
 def reject(
+    request: Request,
     approval_id: str,
     payload: ApprovalDecisionCreate,
     db: Session = Depends(get_db),

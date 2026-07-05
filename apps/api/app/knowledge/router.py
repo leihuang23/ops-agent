@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import secrets
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.bootstrap import bootstrap_lock
 from app.core.access import require_demo_data_access
 from app.core.config import get_settings
+from app.core.limiter import limiter
 from app.db.session import get_db
 
 from .ingestion import ingest_builtin_knowledge_documents
@@ -18,6 +19,8 @@ from .schemas import (
     KnowledgeSearchResult,
 )
 from .search import search_knowledge
+
+_settings = get_settings()
 
 router = APIRouter(
     prefix="/documents",
@@ -48,7 +51,11 @@ def require_document_ingest_access(
 
 
 @router.post("/ingest", dependencies=[Depends(require_document_ingest_access)])
-def ingest_documents(db: Session = Depends(get_db)) -> KnowledgeIngestionResponse:
+@limiter.limit(f"{_settings.rate_limit_mutations_per_minute}/minute")
+def ingest_documents(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> KnowledgeIngestionResponse:
     with bootstrap_lock(db.get_bind()):
         result = ingest_builtin_knowledge_documents(db, force=False)
     return KnowledgeIngestionResponse(
@@ -59,8 +66,11 @@ def ingest_documents(db: Session = Depends(get_db)) -> KnowledgeIngestionRespons
 
 
 @router.post("/search")
+@limiter.limit(f"{_settings.rate_limit_search_per_minute}/minute")
 def search_documents(
-    payload: KnowledgeSearchRequest, db: Session = Depends(get_db)
+    request: Request,
+    payload: KnowledgeSearchRequest,
+    db: Session = Depends(get_db),
 ) -> KnowledgeSearchResponse:
     results = search_knowledge(db, payload.query, limit=payload.limit)
     return KnowledgeSearchResponse(
