@@ -756,6 +756,41 @@ export async function getEvalResults(): Promise<EvalResultsReportResult> {
   }
 }
 
+export type ApprovalRequestListResult =
+  | { ok: true; data: ApprovalRequest[] }
+  | { ok: false; error: string };
+
+export async function listApprovalRequests(
+  status?: ApprovalStatus,
+): Promise<ApprovalRequestListResult> {
+  try {
+    const params = status ? `?status=${encodeURIComponent(status)}` : '';
+    const response = await fetch(`${resolveApiBaseUrl()}/approvals${params}`, {
+      cache: 'no-store',
+    });
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        error: await readErrorMessage(
+          response,
+          `Approvals endpoint returned HTTP ${response.status}`,
+        ),
+      };
+    }
+
+    return {
+      ok: true,
+      data: (await response.json()) as ApprovalRequest[],
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : 'Approvals endpoint unavailable',
+    };
+  }
+}
+
 export async function approveApprovalRequest(
   approvalId: string,
   notes?: string,

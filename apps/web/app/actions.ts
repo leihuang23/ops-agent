@@ -61,6 +61,26 @@ export async function rejectApprovalFromRun(formData: FormData) {
   redirectToRun(runId, result.ok ? undefined : result.error);
 }
 
+export async function approveApprovalFromQueue(formData: FormData) {
+  const approvalId = readRequiredFormValue(formData, 'approval_id');
+  const result = await approveApprovalRequest(
+    approvalId,
+    'Approved from the global approvals queue.',
+  );
+
+  redirectToApprovals(result.ok ? undefined : result.error);
+}
+
+export async function rejectApprovalFromQueue(formData: FormData) {
+  const approvalId = readRequiredFormValue(formData, 'approval_id');
+  const result = await rejectApprovalRequest(
+    approvalId,
+    'Rejected from the global approvals queue.',
+  );
+
+  redirectToApprovals(result.ok ? undefined : result.error);
+}
+
 export async function runEvalSuiteFromReport() {
   const result = await runEvalSuite();
   if (!result.ok) {
@@ -84,4 +104,11 @@ function redirectToRun(runId: string, error?: string) {
     redirect(`/agent/runs/${encodedRunId}?approval_error=${encodeURIComponent(error)}`);
   }
   redirect(`/agent/runs/${encodedRunId}`);
+}
+
+function redirectToApprovals(error?: string) {
+  if (error) {
+    redirect(`/approvals?approval_error=${encodeURIComponent(error)}`);
+  }
+  redirect('/approvals');
 }
