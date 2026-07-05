@@ -53,3 +53,10 @@ export function formatDateTime(value: string) {
 export function formatScenario(value: string | null) {
   return value ? value.replaceAll('_', ' ') : 'routine signal';
 }
+
+export function formatSeverityClass(severity: string): string {
+  const normalized = severity.toLowerCase();
+  if (normalized === 'high' || normalized === 'critical') return 'high';
+  if (normalized === 'medium') return 'medium';
+  return 'low';
+}

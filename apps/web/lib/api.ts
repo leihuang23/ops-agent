@@ -127,6 +127,17 @@ export type RevenueAnomaly = {
   incident_id: string | null;
 };
 
+export type IncidentSummary = {
+  id: string;
+  title: string;
+  status: string;
+  severity: string;
+  anomaly_type: string;
+  detected_at: string;
+  summary: string;
+  affected_account_count: number;
+};
+
 export type IncidentDetail = {
   id: string;
   title: string;
@@ -157,6 +168,10 @@ export type RevenueAnomaliesResult =
 
 export type IncidentDetailResult =
   | { ok: true; data: IncidentDetail }
+  | { ok: false; error: string };
+
+export type IncidentListResult =
+  | { ok: true; data: IncidentSummary[] }
   | { ok: false; error: string };
 
 export type CreateIncidentFromAnomalyResult =
@@ -507,6 +522,31 @@ export async function createIncidentFromAnomaly(
     return {
       ok: false,
       error: error instanceof Error ? error.message : 'Incident creation unavailable',
+    };
+  }
+}
+
+export async function listIncidents(): Promise<IncidentListResult> {
+  try {
+    const response = await fetch(`${resolveApiBaseUrl()}/incidents`, {
+      cache: 'no-store',
+    });
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        error: `Incidents endpoint returned HTTP ${response.status}`,
+      };
+    }
+
+    return {
+      ok: true,
+      data: (await response.json()) as IncidentSummary[],
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : 'Incidents endpoint unavailable',
     };
   }
 }
