@@ -3,12 +3,12 @@ from pathlib import Path
 from app.core.config import Settings
 
 
-def test_docker_compose_wires_app_env_for_api_demo_mode() -> None:
+def test_docker_compose_wires_app_env_for_local_mode_by_default() -> None:
     compose = Path(__file__).resolve().parents[3].joinpath("docker-compose.yml").read_text(
         encoding="utf-8"
     )
 
-    assert "APP_ENV: ${APP_ENV:-demo}" in compose
+    assert "APP_ENV: ${APP_ENV:-local}" in compose
     assert "DEMO_OPERATOR_TOKEN: ${DEMO_OPERATOR_TOKEN:-}" in compose
 
 
