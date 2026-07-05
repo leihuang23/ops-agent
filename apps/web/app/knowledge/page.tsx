@@ -1,20 +1,35 @@
-import Link from 'next/link';
+'use client';
 
-import type { KnowledgeSearchItem } from '@/lib/api';
+import { useState, useTransition } from 'react';
+
+import type { KnowledgeSearchItem, KnowledgeSearchResponse } from '@/lib/api';
 import { searchKnowledge } from '@/lib/api';
 import { formatCount } from '@/lib/format';
 
-type KnowledgePageProps = {
-  searchParams?: Promise<{
-    q?: string;
-  }>;
-};
+export default function KnowledgePage() {
+  const [query, setQuery] = useState('');
+  const [result, setResult] = useState<KnowledgeSearchResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
 
-export default async function KnowledgePage({ searchParams }: KnowledgePageProps) {
-  const resolvedSearchParams = await searchParams;
-  const query = typeof resolvedSearchParams?.q === 'string' ? resolvedSearchParams.q : '';
-  const result = await searchKnowledge(query);
-  const resultCount = result.ok ? result.data.results.length : 0;
+  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const q = String(formData.get('q') ?? '');
+    setQuery(q);
+    setError(null);
+    startTransition(async () => {
+      const response = await searchKnowledge(q);
+      if (response.ok) {
+        setResult(response.data);
+      } else {
+        setResult(null);
+        setError(response.error);
+      }
+    });
+  }
+
+  const resultCount = result?.results.length ?? 0;
 
   return (
     <main className="dashboard-shell">
@@ -27,14 +42,11 @@ export default async function KnowledgePage({ searchParams }: KnowledgePageProps
           <span className="status-pill incident-status">
             {formatCount(resultCount)} chunks
           </span>
-          <Link className="action-button secondary-action" href="/">
-            Dashboard
-          </Link>
         </div>
       </header>
 
       <section className="panel knowledge-search-panel">
-        <form className="knowledge-search-form">
+        <form className="knowledge-search-form" onSubmit={handleSubmit}>
           <input
             aria-label="Search knowledge base"
             className="knowledge-search-input"
@@ -43,26 +55,30 @@ export default async function KnowledgePage({ searchParams }: KnowledgePageProps
             placeholder="retry webhook failed renewals"
             type="search"
           />
-          <button className="action-button" type="submit">
-            Search
+          <button className="action-button" disabled={isPending} type="submit">
+            {isPending ? 'Searching…' : 'Search'}
           </button>
         </form>
       </section>
 
-      {!result.ok ? (
+      {isPending ? (
+        <section className="panel">
+          <div className="panel-message">Searching knowledge base…</div>
+        </section>
+      ) : error ? (
         <section className="empty-state">
           <h2>Knowledge search unavailable</h2>
-          <p className="error-detail">{result.error}</p>
+          <p className="error-detail">{error}</p>
         </section>
-      ) : result.data.query ? (
+      ) : result?.query ? (
         <section className="knowledge-results" aria-label="Knowledge search results">
-          {result.data.results.length === 0 ? (
+          {result.results.length === 0 ? (
             <div className="empty-state">
               <h2>No matching chunks</h2>
               <p>No internal document chunks matched this query.</p>
             </div>
           ) : (
-            result.data.results.map((item) => (
+            result.results.map((item) => (
               <KnowledgeResult item={item} key={item.citation.chunk_id} />
             ))
           )}
@@ -98,7 +114,19 @@ function KnowledgeResult({ item }: { item: KnowledgeSearchItem }) {
         </div>
         <div>
           <dt>Source</dt>
-          <dd>{item.citation.source_path}</dd>
+          <dd>
+            {item.citation.source_uri ? (
+              <a
+                href={item.citation.source_uri}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {item.citation.source_path}
+              </a>
+            ) : (
+              item.citation.source_path
+            )}
+          </dd>
         </div>
       </dl>
     </article>
