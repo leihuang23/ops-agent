@@ -12,6 +12,7 @@ import app.models  # noqa: F401
 from app.core.config import get_settings
 from app.db.base import Base
 from app.db.session import get_db
+from app.agent.service import start_investigation_run
 from app.evals.runner import (
     list_latest_eval_results,
     run_eval_suite,
@@ -236,3 +237,61 @@ def test_eval_api_runs_suite_and_lists_latest_results(
     assert results_payload["latest_eval_run_id"] == run_payload["eval_run_id"]
     assert len(results_payload["results"]) == 5
     assert all("root_cause_score" in result for result in results_payload["results"])
+
+
+def test_eval_suite_persists_failed_result_when_one_case_raises(
+    session_factory: Callable[[], Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with session_factory() as session:
+        reseed_database(session)
+        cases = session.scalars(select(EvalCase).order_by(EvalCase.id)).all()
+        failing_incident_id = cases[0].incident_id
+        failing_scenario = cases[0].scenario
+        total_cases = len(cases)
+
+    original_start = start_investigation_run
+
+    def flaky_start(session: Session, incident_id: str, *, force: bool = False):
+        if incident_id == failing_incident_id:
+            raise RuntimeError("simulated investigation failure")
+        return original_start(session, incident_id, force=force)
+
+    monkeypatch.setattr("app.evals.runner.start_investigation_run", flaky_start)
+
+    with session_factory() as session:
+        summary = run_eval_suite(session)
+
+    # The suite must complete (not raise 500) and persist a result for every case.
+    assert summary.total_scenarios == total_cases
+    failed_results = [result for result in summary.results if not result.passed]
+    assert len(failed_results) == 1
+    failed = failed_results[0]
+    assert failed.scenario == failing_scenario
+    assert failed.actual_root_cause is None
+    assert failed.root_cause_score == 0.0
+    assert failed.failure_reasons
+    assert any(
+        "simulated investigation failure" in reason for reason in failed.failure_reasons
+    )
+
+    # The other cases must still be scored normally.
+    assert len([result for result in summary.results if result.passed]) == total_cases - 1
+
+    # Every result -- including the failed one -- must be persisted.
+    with session_factory() as session:
+        persisted = session.scalars(
+            select(EvalResult).where(EvalResult.eval_run_id == summary.eval_run_id)
+        ).all()
+        assert len(persisted) == total_cases
+        failed_persisted = next(
+            result for result in persisted if result.scenario == failing_scenario
+        )
+        assert failed_persisted.passed is False
+        assert failed_persisted.failure_reasons
+        # The failed case must reference a recorded failed agent run so the dead
+        # end is visible in run history, not silently dropped.
+        failed_run = session.get(AgentRun, failed_persisted.agent_run_id)
+        assert failed_run is not None
+        assert failed_run.status == "failed"
+        assert "simulated investigation failure" in (failed_run.error or "")
