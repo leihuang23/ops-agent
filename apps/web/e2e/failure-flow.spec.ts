@@ -21,7 +21,7 @@ test.describe('failure flow', () => {
 
     // 3. Wait for the report to render. The ambiguous scenario should produce
     //    a low or medium confidence report (not high).
-    await expect(page.getByRole('heading', { name: 'Root cause' })).toBeVisible({
+    await expect(page.getByRole('heading', { name: 'Root cause', exact: true })).toBeVisible({
       timeout: 30000,
     });
 
