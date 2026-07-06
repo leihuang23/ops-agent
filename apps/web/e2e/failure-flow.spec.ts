@@ -33,21 +33,23 @@ test.describe('failure flow', () => {
     const confidenceText = (await confidencePill.textContent()) ?? '';
     expect(confidenceText.toLowerCase()).not.toContain('high');
 
-    // 4. Navigate to the approvals queue and reject the first pending request.
-    await page.getByRole('navigation').getByRole('link', { name: 'Approvals' }).click();
-    await page.waitForURL('/approvals');
-    await expect(page.getByRole('heading', { name: 'Approval queue' })).toBeVisible();
+    // 4. Reject the pending request that belongs to this investigation run.
+    // The full demo flow can create other pending approvals via eval runs, so
+    // keep this assertion scoped to the current run instead of the global queue.
+    const runApprovalPanel = page.locator('section.approval-panel');
+    await expect(
+      runApprovalPanel.getByRole('heading', { name: 'Approval queue' }),
+    ).toBeVisible();
 
-    const rejectButton = page.getByRole('button', { name: 'Reject' }).first();
+    const rejectButton = runApprovalPanel.getByRole('button', { name: 'Reject' }).first();
     await expect(rejectButton).toBeVisible();
     await rejectButton.click();
-    await page.waitForURL('/approvals');
 
-    // 5. The rejected approval must stay rejected. The status badge should show
-    //    "rejected" and the Approve/Reject buttons must be gone (only pending
-    //    approvals show action buttons).
-    await expect(page.locator('.action-rejected').first()).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Reject' })).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Approve' })).toHaveCount(0);
+    // 5. The rejected approval must stay rejected for this run. Its status
+    // badge should show "rejected" and the run-scoped Approve/Reject buttons
+    // must be gone.
+    await expect(runApprovalPanel.locator('.action-rejected').first()).toBeVisible();
+    await expect(runApprovalPanel.getByRole('button', { name: 'Reject' })).toHaveCount(0);
+    await expect(runApprovalPanel.getByRole('button', { name: 'Approve' })).toHaveCount(0);
   });
 });
