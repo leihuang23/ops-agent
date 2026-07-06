@@ -33,9 +33,9 @@ Do not advance a readiness label by editing this file. Advance it by adding impl
 
 ## Structure
 
-- `apps/api` - FastAPI app with Pydantic v2 settings, SQLAlchemy 2 engine/session setup, Alembic, seeded SaaS data, metrics, incidents, knowledge search, Celery task worker entrypoint, and pytest coverage.
-- `apps/web` - Next.js App Router UI for the operational dashboard, incident detail flow, and knowledge search.
-- `docker-compose.yml` - Local Postgres, Redis, API, worker, and web services with health checks.
+- `apps/api` - FastAPI app with Pydantic v2 settings, SQLAlchemy 2 engine/session setup, Alembic migrations, seeded SaaS data, domain routers (metrics, accounts, support, incidents, agent, approvals, evals, knowledge, health), Celery task workers for investigations and evals, and pytest coverage.
+- `apps/web` - Next.js App Router UI for the operational dashboard, incident detail, agent run timeline, approvals queue, accounts list/detail, support tickets, knowledge search, and eval report.
+- `docker-compose.yml` - Local Postgres (pgvector), Redis, API, Celery worker, and web services with health checks.
 - `prd.md` - Product brief and success criteria.
 - `AGENTS.md` - Project guardrails for future agent work.
 
@@ -65,6 +65,11 @@ Useful URLs:
 - Backend readiness: http://localhost:8000/ready
 - API docs: http://localhost:8000/docs
 - Frontend: http://localhost:3000
+- Incidents: http://localhost:3000/incidents
+- Accounts: http://localhost:3000/accounts
+- Support tickets: http://localhost:3000/support/tickets
+- Agent runs: http://localhost:3000/agent/runs
+- Approvals: http://localhost:3000/approvals
 - Knowledge search: http://localhost:3000/knowledge
 - Eval report: http://localhost:3000/evals
 
@@ -81,15 +86,16 @@ pytest
 uvicorn app.main:app --reload
 ```
 
-Run a local Celery worker for async investigation runs (the API queues runs to
-Redis when `run_inline` is false):
+Run a local Celery worker for async investigation and eval runs (the API queues
+work to Redis when `run_inline` is false or when the eval suite is triggered
+via `POST /evals/run`):
 
 ```bash
 cd apps/api
 celery -A app.celery_app.celery_app worker --loglevel=info --concurrency=2
 ```
 
-Run Alembic migrations when migrations exist:
+Run Alembic migrations:
 
 ```bash
 cd apps/api
@@ -103,10 +109,10 @@ cd apps/api
 python -m app.seed --json
 ```
 
-This recreates the seeded SaaS domain tables with 60 accounts, 600 invoices,
-6,000 product events, 240 support tickets, 5 open scenario incidents, 5 eval
-cases, and the built-in knowledge base documents. Re-running it should produce
-the same counts and fingerprint.
+This recreates the seeded SaaS domain tables with 60 accounts, 300 users,
+60 subscriptions, 600 invoices, 6,000 product events, 240 support tickets,
+6 open scenario incidents, 6 eval cases, 24 knowledge documents, and 61
+document chunks. Re-running it should produce the same counts and fingerprint.
 
 Ingest or refresh only the built-in knowledge base:
 
@@ -139,6 +145,8 @@ hashing with a warning.
 
 - `DOCUMENT_INGEST_TOKEN=` optional token for the mutating HTTP ingest endpoint
 - `EVAL_RUN_TOKEN=` optional token that enables the mutating HTTP eval runner
+- `RATE_LIMIT_MUTATIONS_PER_MINUTE=10` rate limit for mutating endpoints (requires Redis)
+- `RATE_LIMIT_SEARCH_PER_MINUTE=60` rate limit for search endpoints (requires Redis)
 
 ## LLM Configuration
 
@@ -161,7 +169,11 @@ prompt/completion tokens, and a cost estimate on each run. If the LLM call
 fails or returns unusable output, the run falls back to the deterministic
 classifier and records the fallback reason in `trace_metadata`.
 
-## Observability And Tracing
+## Observability, Logging, And Tracing
+
+API errors return a structured envelope `{ "error": { "code", "message", "request_id" } }`.
+The ASGI middleware attaches an `X-Request-ID` to every request and propagates
+it through JSON logs when `LOG_FORMAT=json` is set.
 
 Every agent run persists `trace_id`, `trace_url`, `trace_provider`, and
 `trace_metadata`. The eval tables remain the source of truth for regression
@@ -199,7 +211,7 @@ and fallback reason.
 
 ## Eval Suite
 
-The eval suite runs the investigation workflow against five seeded incident
+The eval suite runs the investigation workflow against six seeded incident
 scenarios:
 
 - checkout retry regression
@@ -207,6 +219,7 @@ scenarios:
 - usage drop after import outage
 - support backlog export bug
 - payment method expiration
+- unknown root cause (ambiguity case)
 
 Each eval case stores the expected root cause, expected evidence types, expected
 evidence markers, false leads, and recommended actions. Scoring persists:
@@ -232,19 +245,21 @@ EVAL_RUN_TOKEN=dev-eval-token
 curl -X POST http://localhost:8000/evals/run \
   -H "X-Eval-Run-Token: ${EVAL_RUN_TOKEN}"
 curl http://localhost:8000/evals/results
+curl http://localhost:8000/evals/runs/<eval_run_id>
 ```
 
-`POST /evals/run` is disabled unless `EVAL_RUN_TOKEN` is configured. The CLI
-runner remains the preferred local path because it cannot be triggered by an
-anonymous HTTP caller. The frontend Run Suite button uses the same
-`EVAL_RUN_TOKEN` from the web process environment.
+`POST /evals/run` returns `202 Accepted` and runs the suite asynchronously via
+Celery. It is disabled unless `EVAL_RUN_TOKEN` is configured. The CLI runner
+remains the preferred local path because it cannot be triggered by an anonymous
+HTTP caller. The frontend Run Suite button uses the same `EVAL_RUN_TOKEN` from
+the web process environment.
 
 The frontend report is available at `http://localhost:3000/evals` and shows
 scenario results, failures, trace links, and example outputs.
 
 Known failures and limitations:
 
-- Current seeded run result: all five eval scenarios pass in the local deterministic suite.
+- Current seeded run result: all six eval scenarios pass in the local deterministic suite.
 - Without Langfuse or LangSmith credentials, traces are local identifiers rather than hosted trace pages.
 - Without `LANGFUSE_PROJECT_ID`, Langfuse runs persist a `langfuse://traces/<trace_id>` identifier instead of a clickable UI URL.
 - Hosted traces redact raw evidence payloads by default; enable `OBSERVABILITY_FULL_PAYLOADS=true` only when the seeded synthetic data export is intentional.
@@ -282,6 +297,8 @@ cd apps/api
 .venv/bin/python -m pytest
 ```
 
+The backend suite currently contains ~163 behavior and contract tests.
+
 Run the frontend contract/type/build checks:
 
 ```bash
@@ -290,6 +307,8 @@ npm test
 npm run lint
 npm run build
 ```
+
+The frontend unit/contract suite currently contains 8 tests.
 
 Run the Playwright E2E test against a started Docker stack:
 
@@ -310,9 +329,12 @@ curl http://localhost:8000/ready
 curl http://localhost:8000/metrics/revenue
 curl http://localhost:8000/metrics/dashboard
 curl http://localhost:8000/metrics/anomalies
+curl http://localhost:8000/accounts
 curl http://localhost:8000/accounts/acct_001
 curl "http://localhost:8000/support/tickets?account_id=acct_001&limit=5"
 curl http://localhost:8000/incidents
+curl http://localhost:8000/agent/runs
+curl http://localhost:8000/approvals
 curl -X POST http://localhost:8000/evals/run -H "X-Eval-Run-Token: ${EVAL_RUN_TOKEN}"
 curl http://localhost:8000/evals/results
 ```
@@ -346,18 +368,30 @@ Inspect the project as a vertical product slice first. Promote it to full MVP in
    - Check that the incident page shows metric evidence, failed invoice IDs, affected accounts, support signals, product signals, and source query descriptions.
    - Treat this as structured incident evidence, not yet as a generated agent final report.
 
-4. Review knowledge search at http://localhost:3000/knowledge.
+4. Start an investigation from an incident page and inspect the run at `/agent/runs/{run_id}`.
+   - Confirm the run page shows root cause, cited evidence, affected accounts, trace identifier, token/cost estimate, approval queue state, mock actions, and step history.
+
+5. Review the approvals queue at http://localhost:3000/approvals.
+   - Confirm high-risk mock actions are pending, and that approving or rejecting updates the action status and audit trail.
+
+6. Review accounts and support at http://localhost:3000/accounts and http://localhost:3000/support/tickets.
+   - Confirm accounts expose subscription, invoice, ticket, and product-event context.
+   - Confirm tickets can be filtered by account, status, category, and scenario.
+
+7. Review knowledge search at http://localhost:3000/knowledge.
    - Search for `retry webhook failed renewals`.
    - Confirm results include source IDs, chunk IDs, headings, source paths, snippets, and scores.
 
-5. Review seed scenario quality.
-   - Find the scenario definitions and their integrity tests.
+8. Review seed scenario quality.
+   - Find the scenario definitions in `apps/api/app/seed.py` and their integrity tests.
    - Verify each scenario has accounts, tickets or other source evidence, expected evidence, false leads, and recommendations.
-   - Check whether scenarios beyond the main demo path are rich enough for future evals.
+   - Confirm the `unknown_root_cause` ambiguity scenario is present and that the agent reports uncertainty rather than a false diagnosis.
 
-6. Review safety boundaries.
+9. Review safety boundaries.
    - Demo data endpoints are restricted to local/test/development/demo environments.
    - The document ingestion HTTP endpoint is disabled unless `DOCUMENT_INGEST_TOKEN` is configured.
+   - `POST /evals/run` is disabled unless `EVAL_RUN_TOKEN` is configured.
+   - Mutations are gated by `DEMO_OPERATOR_TOKEN` when `APP_ENV=demo`.
    - Risky mock actions create approval requests and stay blocked until an operator approves or rejects them.
 
 Important inspection questions:
@@ -374,7 +408,7 @@ Use `prd.md` as the durable roadmap. This section defines completion gates that 
 
 The project is not MVP-complete until all of these are true:
 
-- At least five seeded incident scenarios exist and are covered by integrity tests.
+- At least five seeded incident scenarios exist and are covered by integrity tests (the current seed has six, including an ambiguity case).
 - At least four of five eval scenarios resolve to the intended root cause.
 - Final reports cite SQL results, support tickets, knowledge documents, or incident records for every major claim.
 - Risky actions create approval requests or mock actions and cannot bypass approval/rejection.

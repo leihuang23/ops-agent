@@ -2,21 +2,21 @@
 
 This runbook covers the Week 6-ready local review path for Project 1, the SaaS Revenue and Support Ops Agent. It is written for a reviewer who wants to prove the app boots, the seeded incident scenarios are present, the agent produces cited reports, approval gates work, and the eval suite passes.
 
-Verified locally on 2026-06-25 after reading `local-docs/ai-agent-portfolio-roadmap.md` and `prd.md`.
+Verified locally on 2026-07-06 after reading `prd.md`, `AGENTS.md`, and the current implementation.
 
 ## Current Readiness Snapshot
 
-Project 1 is locally reviewable after one boot fix:
+Project 1 is locally reviewable:
 
-- Backend tests: `71 passed`
-- Frontend tests: `7 passed`
+- Backend tests: `163 passed`
+- Frontend tests: `8 passed`
 - Frontend typecheck: passed
 - Frontend production build: passed
-- Docker stack: API, web, Postgres, and Redis started successfully
-- Canonical seed dataset: `60` accounts, `600` invoices, `6000` product events, `240` support tickets, `24` knowledge docs, `5` incidents, `5` eval cases
-- Seed fingerprint: `f45cd41e419bd6c9`
-- Eval suite: `5/5` scenarios passed
-- Web pages smoke-tested with HTTP 200: `/`, `/knowledge`, `/evals`, `/incidents/inc_rev_mrr_wow_drop_20260603`, `/agent/runs/run_0df36243e42f4d05`
+- Docker stack: API, worker, web, Postgres, and Redis started successfully
+- Canonical seed dataset: `60` accounts, `300` users, `60` subscriptions, `600` invoices, `6000` product events, `240` support tickets, `24` knowledge docs, `61` knowledge chunks, `6` incidents, `6` eval cases
+- Seed fingerprint: `331ddf950316d676`
+- Eval suite: `6/6` scenarios passed
+- Web pages smoke-tested with HTTP 200: `/`, `/incidents`, `/incidents/inc_rev_mrr_wow_drop_20260603`, `/agent/runs`, `/agent/runs/{run_id}`, `/approvals`, `/accounts`, `/accounts/acct_001`, `/support/tickets`, `/knowledge`, `/evals`
 
 ## Prerequisites
 
@@ -61,6 +61,10 @@ OBSERVABILITY_PROVIDER=auto
 DOCUMENT_INGEST_TOKEN=
 EVAL_RUN_TOKEN=
 DEMO_OPERATOR_TOKEN=
+LOG_LEVEL=INFO
+LOG_FORMAT=text
+RATE_LIMIT_MUTATIONS_PER_MINUTE=10
+RATE_LIMIT_SEARCH_PER_MINUTE=60
 ```
 
 With no Langfuse or LangSmith credentials, agent runs produce local trace identifiers such as:
@@ -84,6 +88,7 @@ Check containers:
 ```bash
 docker-compose ps
 docker-compose logs --no-color --tail=120 api
+docker-compose logs --no-color --tail=80 worker
 docker-compose logs --no-color --tail=80 web
 ```
 
@@ -92,6 +97,7 @@ Expected services:
 - `postgres` on `localhost:5432`
 - `redis` on `localhost:6379`
 - API on `http://localhost:8000`
+- Celery worker (`worker`)
 - Web on `http://localhost:3000`
 
 If the API log says `Seed data already present; skipping reseed` but eval cases are missing, your Docker volume has older data. Refresh the canonical Week 6 dataset:
@@ -105,8 +111,8 @@ Expected canonical counts include:
 ```json
 {
   "accounts": 60,
-  "eval_cases": 5,
-  "incidents": 5,
+  "eval_cases": 6,
+  "incidents": 6,
   "knowledge_documents": 24,
   "knowledge_document_chunks": 61
 }
@@ -131,6 +137,8 @@ pip install -e ".[dev]"
 python -m pytest
 ```
 
+The backend suite currently contains ~163 tests.
+
 Frontend:
 
 ```bash
@@ -141,6 +149,8 @@ npm run lint
 npm run build
 ```
 
+The frontend unit/contract suite currently contains 8 tests.
+
 ## API Smoke Checks
 
 Use `--noproxy '*'` if needed:
@@ -149,8 +159,15 @@ Use `--noproxy '*'` if needed:
 curl --noproxy '*' http://localhost:8000/health
 curl --noproxy '*' http://localhost:8000/ready
 curl --noproxy '*' http://localhost:8000/metrics/revenue
+curl --noproxy '*' http://localhost:8000/metrics/dashboard
 curl --noproxy '*' http://localhost:8000/metrics/anomalies
+curl --noproxy '*' http://localhost:8000/accounts
+curl --noproxy '*' http://localhost:8000/accounts/acct_001
+curl --noproxy '*' http://localhost:8000/support/tickets?limit=5
 curl --noproxy '*' http://localhost:8000/incidents
+curl --noproxy '*' http://localhost:8000/agent/runs
+curl --noproxy '*' http://localhost:8000/approvals
+curl --noproxy '*' http://localhost:8000/evals/results
 ```
 
 Expected health:
@@ -162,8 +179,11 @@ Expected health:
 Expected readiness includes:
 
 ```json
-{"postgres":"ok","redis":"ok"}
+{"status":"ok","service":"ops-agent-api","version":"0.1.0","postgres":"ok","redis":"ok"}
 ```
+
+If a dependency is down, `/ready` returns HTTP 503 with the failing check marked
+as `"error"`.
 
 The canonical MRR anomaly should include:
 
@@ -178,9 +198,14 @@ The canonical MRR anomaly should include:
 Open these pages:
 
 - Dashboard: `http://localhost:3000/`
+- Incidents: `http://localhost:3000/incidents`
+- Primary incident: `http://localhost:3000/incidents/inc_rev_mrr_wow_drop_20260603`
+- Agent runs: `http://localhost:3000/agent/runs`
+- Approvals: `http://localhost:3000/approvals`
+- Accounts: `http://localhost:3000/accounts`
+- Support tickets: `http://localhost:3000/support/tickets`
 - Knowledge search: `http://localhost:3000/knowledge`
 - Eval report: `http://localhost:3000/evals`
-- Primary incident: `http://localhost:3000/incidents/inc_rev_mrr_wow_drop_20260603`
 
 On the dashboard, confirm the operator can see revenue health, anomalies, and navigation into the incident/eval/knowledge surfaces.
 
@@ -188,9 +213,13 @@ On the incident page, confirm the user can inspect metric evidence, affected acc
 
 On a run page, confirm the user can inspect root cause, cited evidence, affected accounts, trace identifier, cost/token estimate, approval queue state, mock actions, and step history.
 
+On the approvals page, confirm high-risk actions are pending and can be approved or rejected.
+
+On the accounts and support pages, confirm cross-linked entities (account names, ticket IDs) navigate to detail views with subscription, invoice, ticket, and event context.
+
 ## Investigation Flow
 
-Launch the primary investigation:
+Launch the primary investigation (add `-H "X-Demo-Operator-Token: ${DEMO_OPERATOR_TOKEN}"` when `APP_ENV=demo`):
 
 ```bash
 curl --noproxy '*' -X POST http://localhost:8000/agent/investigations \
@@ -231,7 +260,7 @@ List pending approval requests:
 curl --noproxy '*' http://localhost:8000/approvals
 ```
 
-Approve one high-risk action:
+Approve one high-risk action (add `-H "X-Demo-Operator-Token: ${DEMO_OPERATOR_TOKEN}"` when `APP_ENV=demo`):
 
 ```bash
 curl --noproxy '*' -X POST http://localhost:8000/approvals/<approval_id>/approve \
@@ -239,7 +268,7 @@ curl --noproxy '*' -X POST http://localhost:8000/approvals/<approval_id>/approve
   -d '{"notes":"Reviewer approves this mock action."}'
 ```
 
-Reject another high-risk action:
+Reject another high-risk action (add `-H "X-Demo-Operator-Token: ${DEMO_OPERATOR_TOKEN}"` when `APP_ENV=demo`):
 
 ```bash
 curl --noproxy '*' -X POST http://localhost:8000/approvals/<approval_id>/reject \
@@ -252,6 +281,7 @@ Expected safety behavior:
 - Approved high-risk mock action changes to `executed`.
 - Rejected high-risk mock action changes to `rejected` and does not execute.
 - Audit events are persisted for proposed, approved/rejected, and executed states.
+- The approval service uses a conditional `UPDATE … WHERE status='pending'` claim, so concurrent approve/reject requests on the same approval return `409 Conflict` instead of corrupting state.
 - The current schema accepts `notes`; reviewer identity is fixed by the demo service as `demo-approver`.
 
 ## Knowledge Search Flow
@@ -286,19 +316,29 @@ Expected without token:
 HTTP/1.1 403 Forbidden
 ```
 
-Run evals from the API container:
+When enabled, `POST /evals/run` returns `202 Accepted` and runs the suite
+asynchronously via Celery:
+
+```bash
+curl --noproxy '*' -X POST http://localhost:8000/evals/run \
+  -H "X-Eval-Run-Token: ${EVAL_RUN_TOKEN}"
+curl --noproxy '*' http://localhost:8000/evals/runs/<eval_run_id>
+curl --noproxy '*' http://localhost:8000/evals/results
+```
+
+Run evals synchronously from the API container:
 
 ```bash
 docker-compose exec -T api python -m app.evals.runner --json
 ```
 
-Expected Week 6 result:
+Expected result:
 
 ```json
 {
   "status": "passed",
-  "total_scenarios": 5,
-  "passed_scenarios": 5,
+  "total_scenarios": 6,
+  "passed_scenarios": 6,
   "failed_scenarios": 0
 }
 ```
@@ -311,7 +351,7 @@ curl --noproxy '*' http://localhost:8000/evals/results
 
 ## Seeded Scenario Coverage
 
-All five scenarios should pass evals with root-cause score `1.0`, citation quality `1.0`, and action safety `1.0`.
+All six scenarios should pass evals with root-cause score `1.0`, citation quality `1.0`, and action safety `1.0`.
 
 | Scenario | Incident ID | Expected Root Cause | Evidence Types | Expected Approval Behavior |
 | --- | --- | --- | --- | --- |
@@ -320,13 +360,20 @@ All five scenarios should pass evals with root-cause score `1.0`, citation quali
 | usage drop after import outage | `inc_eval_usage_drop_after_import_outage` | CSV import instability reduced recent active usage. | SQL, document, ticket | Same approval boundary. |
 | support backlog export bug | `inc_eval_support_backlog_export_bug` | Report export filter bug caused duplicate product tickets. | SQL, document, ticket | Same approval boundary. |
 | payment method expiration | `inc_eval_payment_method_expiration` | Expired payment methods were not refreshed before renewal. | SQL, document, ticket | Same approval boundary. |
+| unknown root cause | `inc_eval_unknown_root_cause` | MRR dropped after failed renewals, but the available evidence does not prove a specific operational root cause. | SQL, ticket | Same approval boundary; the agent should report uncertainty rather than hallucinate a diagnosis. |
 
-Manual scenario check:
+Manual scenario checks (the `X-Demo-Operator-Token` header is required when `APP_ENV=demo`):
 
 ```bash
 curl --noproxy '*' -X POST http://localhost:8000/agent/investigations \
   -H 'Content-Type: application/json' \
+  -H "X-Demo-Operator-Token: ${DEMO_OPERATOR_TOKEN}" \
   -d '{"incident_id":"inc_eval_payment_method_expiration","force":true,"run_inline":true}'
+
+curl --noproxy '*' -X POST http://localhost:8000/agent/investigations \
+  -H 'Content-Type: application/json' \
+  -H "X-Demo-Operator-Token: ${DEMO_OPERATOR_TOKEN}" \
+  -d '{"incident_id":"inc_eval_unknown_root_cause","force":true,"run_inline":true}'
 ```
 
 Repeat with any incident ID in the table.
@@ -379,7 +426,13 @@ API crashes on startup with `SettingsError` for `backend_cors_origins`:
 - Fixed in `apps/api/app/core/config.py` by using `pydantic_settings.NoDecode`.
 - Regression test: `apps/api/tests/test_config.py`.
 
-Eval suite reports zero scenarios:
+`429 Too Many Requests` on mutating or search endpoints:
+
+- Mutations are rate-limited by `RATE_LIMIT_MUTATIONS_PER_MINUTE` (default 10/min in `.env.example`).
+- Search is rate-limited by `RATE_LIMIT_SEARCH_PER_MINUTE` (default 60/min in `.env.example`).
+- Rate limiting requires a reachable Redis broker.
+
+Eval suite reports zero scenarios or fewer than expected:
 
 - Your Postgres Docker volume likely contains older seed data.
 - Run `docker-compose exec -T api python -m app.seed --json`.
@@ -396,7 +449,7 @@ Eval suite reports zero scenarios:
 
 Docker build is slow:
 
-- The API and web build contexts currently include local generated/dependency folders. Add `.dockerignore` files later to exclude `.venv`, `.pytest_cache`, `node_modules`, `.next`, and TypeScript build info.
+- `.dockerignore` files now exclude `.venv`, `.pytest_cache`, `node_modules`, `.next`, and TypeScript build info. If you add new local artifact directories, update the ignore files.
 
 Frontend log warns about mismatching `@next/swc`:
 

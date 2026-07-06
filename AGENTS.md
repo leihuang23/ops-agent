@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This repository is for a production-shaped SaaS revenue and support operations agent. The current source of truth is `prd.md`; treat it as the product brief, not as a complete implementation plan.
+This repository is for a production-shaped SaaS revenue and support operations agent. `prd.md` is the product brief and success criteria; the implementation source of truth is the code, Alembic migrations, API OpenAPI docs, and tests. Treat `prd.md` as the contract, not a detailed implementation plan.
 
 ## Critical Product Read
 
@@ -18,6 +18,7 @@ The third risk is unrealistic seed data. If scenarios are too obvious or linear,
 - Keep the first version focused on the primary investigation loop: anomaly -> evidence gathering -> root cause -> affected accounts -> recommended actions -> approval-gated drafts.
 - Every important claim in the UI, API, final report, and eval output must be backed by cited SQL results, tickets, documents, or incident records.
 - Never let the agent perform irreversible or external write actions without explicit approval. In the first version, all Slack, email, CRM, and task actions must be mocks.
+- Demo mutations (`POST /incidents`, `POST /agent/investigations`, `POST /approvals/{id}/approve|reject`, `POST /mock-actions`, `POST /evals/run`) are gated by `DEMO_OPERATOR_TOKEN` when `APP_ENV=demo`. Local/test/development environments can run without the token, but never disable the gate for a publicly accessible demo.
 - Treat seeded scenarios and eval cases as product-critical assets, not test fixtures of convenience.
 - Prefer deterministic analytics and explicit tool results before LLM summarization. The LLM should synthesize evidence, not invent the evidence.
 - Do not introduce real customer data or real third-party integrations unless the PRD is explicitly updated to allow them.
@@ -26,7 +27,7 @@ The third risk is unrealistic seed data. If scenarios are too obvious or linear,
 
 Build the smallest credible system that can pass the PRD success criteria:
 
-- At least 5 seeded incident scenarios.
+- At least 5 seeded incident scenarios (the current seed includes 6 scenarios, including one ambiguity case).
 - At least 4 of 5 eval scenarios correctly identify the intended root cause.
 - Final reports cite SQL queries, support tickets, docs, or incidents for every major claim.
 - Approval requests block risky actions until approved or rejected.
@@ -43,6 +44,8 @@ If implementation effort grows, cut optional infrastructure before cutting evide
 - Store agent run steps with enough detail to replay or audit the investigation without reading logs.
 - Keep provider abstraction minimal until there is real pressure to support multiple LLM providers.
 - Do not add dependencies only because they are listed in the PRD. Add each dependency when a real implementation need appears.
+- The current backend is organized by domain under `apps/api/app/`: `accounts`, `agent`, `approvals`, `core`, `db`, `evals`, `health`, `incidents`, `knowledge`, `llm`, `metrics`, and `support`. The Next.js frontend under `apps/web/app/` mirrors the operational surfaces: dashboard, incidents, agent runs, approvals, accounts, support tickets, knowledge search, and evals.
+- The PRD lists LangGraph as the recommended orchestrator. The MVP uses a fixed linear investigation DAG implemented directly in `apps/api/app/agent/workflow.py`. Do not introduce LangGraph unless a real feature requires dynamic branching; keep the orchestration simple and auditable.
 
 ## Data And Scenario Rules
 
