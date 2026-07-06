@@ -357,3 +357,119 @@ def test_langsmith_provider_uses_explicit_client_settings(monkeypatch) -> None:
     assert trace.provider == "langsmith"
     assert trace.metadata["endpoint"] == "https://smith-api.example.test"
     assert trace.metadata["payload_mode"] == "metadata_only"
+
+
+def test_investigation_workflow_withholds_evidence_payloads_from_hosted_trace(
+    monkeypatch, tmp_path
+) -> None:
+    """End-to-end: when observability_full_payloads is false, a real investigation
+    workflow must not leak evidence/report/customer details to the hosted tracing
+    provider. Only summarized metadata (counts, keys, safe scalars) should appear.
+
+    This test runs the actual ``run_investigation_workflow`` against seeded data
+    with a FakeLangfuseClient that captures every ``update()`` call, then asserts
+    that sensitive seeded values are absent from the captured payloads.
+    """
+    from datetime import UTC, datetime
+    from uuid import uuid4
+
+    from sqlalchemy import create_engine, select
+    from sqlalchemy.orm import sessionmaker
+
+    import app.models  # noqa: F401
+    from app.agent.workflow import run_investigation_workflow
+    from app.db.base import Base
+    from app.llm import NoopLLMClient
+    from app.models import AgentRun, Incident
+    from app.seed import reseed_database
+
+    FakeLangfuseClient.instances.clear()
+    monkeypatch.setitem(
+        sys.modules,
+        "langfuse",
+        SimpleNamespace(Langfuse=FakeLangfuseClient),
+    )
+
+    settings = Settings(
+        observability_provider="langfuse",
+        langfuse_public_key="pk_test",
+        langfuse_secret_key="sk_test",
+    )
+
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'observability_e2e.db'}",
+        connect_args={"check_same_thread": False},
+    )
+    Base.metadata.create_all(engine)
+    TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+    with TestingSessionLocal() as session:
+        reseed_database(session)
+        incident = session.scalar(select(Incident))
+        assert incident is not None
+        run = AgentRun(
+            id=f"run_{uuid4().hex[:16]}",
+            incident_id=incident.id,
+            status="running",
+            trace_id=None,
+            trace_url=None,
+            trace_provider=None,
+            trace_metadata={},
+            input_payload={"incident_id": incident.id},
+            final_report=None,
+            token_estimate=0,
+            prompt_tokens=0,
+            completion_tokens=0,
+            cost_estimate_usd=0.0,
+            error=None,
+            started_at=datetime.now(UTC).replace(tzinfo=None),
+            completed_at=None,
+            created_at=datetime.now(UTC).replace(tzinfo=None),
+            updated_at=datetime.now(UTC).replace(tzinfo=None),
+        )
+        session.add(run)
+        session.commit()
+
+        trace = start_agent_trace(
+            run_id=run.id,
+            incident_id=incident.id,
+            settings=settings,
+        )
+        assert trace.provider == "langfuse"
+        assert trace._record_full_payloads is False
+
+        report = run_investigation_workflow(
+            session, run, trace=trace, llm_client=NoopLLMClient()
+        )
+        trace.finish(outputs=report.model_dump(mode="json"))
+
+    Base.metadata.drop_all(engine)
+    engine.dispose()
+
+    # The FakeLangfuseClient captured every update() call. Serialize all
+    # captured payloads and assert that sensitive seeded data is absent.
+    client = FakeLangfuseClient.instances[0]
+    serialized = repr(client.updates)
+
+    # Seeded account names, ticket descriptions, and evidence details must
+    # not appear in the trace payload sent to the hosted provider.
+    assert "Synthetic Customer" not in serialized
+    assert "Retry webhook" not in serialized
+    # The root_cause IS a safe scalar (in SAFE_TRACE_SCALAR_KEYS) and should
+    # be present — this verifies the summarizer keeps safe operational values
+    # while withholding raw evidence/customer data.
+    assert report.root_cause  # sanity: the workflow produced a root cause
+    assert report.root_cause in serialized  # root_cause is kept as a safe scalar
+
+    # Verify that at least one child span received summarized (not raw) output:
+    # the synthesize-report step output should have payload_type=dict, not the
+    # full report body with cited_evidence details.
+    report_updates = [
+        payload for name, payload in client.updates
+        if name == "synthesize report" and "output" in payload
+    ]
+    assert report_updates, "synthesize report step must have a trace output"
+    report_output = report_updates[0]["output"]
+    assert report_output["payload_type"] == "dict"
+    assert "cited_evidence_count" in report_output  # count, not contents
+    assert "affected_accounts_count" in report_output

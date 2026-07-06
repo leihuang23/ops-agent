@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Response
 from pydantic import BaseModel
 from redis import Redis
 from sqlalchemy import text
@@ -31,20 +31,46 @@ def health() -> HealthResponse:
 
 
 @router.get("/ready")
-def ready() -> ReadinessResponse:
+def ready(response: Response) -> ReadinessResponse:
+    """Check both Postgres and Redis dependencies independently.
+
+    Each check is isolated so that one failing dependency does not mask the
+    status of the other. If any check fails, the response is 503 with the
+    failing check's error message surfaced in the body so operators can see
+    *which* dependency is unhealthy without reading server logs.
+    """
     settings = get_settings()
 
-    with engine.connect() as connection:
-        connection.execute(text("select 1"))
+    postgres_status = _check_postgres()
+    redis_status = _check_redis(settings.redis_url)
 
-    redis_client = Redis.from_url(settings.redis_url)
-    redis_client.ping()
+    overall = "ok" if postgres_status == "ok" and redis_status == "ok" else "unhealthy"
+    if overall != "ok":
+        response.status_code = 503
 
     return ReadinessResponse(
-        status="ok",
+        status=overall,
         service=settings.app_name,
         version=settings.app_version,
-        postgres="ok",
-        redis="ok",
+        postgres=postgres_status,
+        redis=redis_status,
     )
+
+
+def _check_postgres() -> str:
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("select 1"))
+    except Exception as exc:
+        return f"error: {exc}"
+    return "ok"
+
+
+def _check_redis(redis_url: str) -> str:
+    try:
+        redis_client = Redis.from_url(redis_url)
+        redis_client.ping()
+    except Exception as exc:
+        return f"error: {exc}"
+    return "ok"
 
