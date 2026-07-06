@@ -75,12 +75,12 @@ def _check_redis(redis_url: str) -> str:
     try:
         redis_client = Redis.from_url(redis_url, socket_connect_timeout=2)
     except Exception as exc:
-        logger.error("Redis health check failed: %s", exc)
+        logger.error("Redis from_url failed: %s", exc)
         return "error"
     try:
         redis_client.ping()
     except Exception as exc:
-        logger.error("Redis health check failed: %s", exc)
+        logger.error("Redis ping failed: %s", exc)
         return "error"
     finally:
         redis_client.close()

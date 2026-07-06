@@ -93,6 +93,7 @@ def test_ready_returns_503_when_redis_from_url_fails(monkeypatch) -> None:
     assert response.status_code == 503
     body = response.json()
     assert body["status"] == "unhealthy"
+    assert body["postgres"] == "ok"
     assert body["redis"] == "error"
     # Must not leak the URL parsing error.
     assert "invalid redis url" not in str(body)
