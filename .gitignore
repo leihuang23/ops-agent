@@ -18,6 +18,7 @@ build/
 node_modules/
 .next/
 out/
+plans/
 *.tsbuildinfo
 
 # Playwright
