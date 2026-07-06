@@ -82,6 +82,11 @@ class IncidentSummary(BaseModel):
     affected_account_count: int
 
 
+class IncidentList(BaseModel):
+    total: int
+    incidents: list[IncidentSummary]
+
+
 class IncidentDetail(BaseModel):
     id: str
     title: str

@@ -12,6 +12,7 @@ import app.models  # noqa: F401
 from app.core.config import get_settings
 from app.db.base import Base
 from app.db.session import get_db
+from app.agent.service import start_investigation_run
 from app.evals.runner import (
     list_latest_eval_results,
     run_eval_suite,
@@ -46,7 +47,7 @@ def test_seeded_eval_cases_cover_every_incident_scenario(
 
         cases = session.scalars(select(EvalCase).order_by(EvalCase.id)).all()
 
-        assert len(cases) == 5
+        assert len(cases) == 6
         assert {case.scenario for case in cases} == set(SCENARIOS)
         assert all(case.incident_id for case in cases)
         assert all(case.expected_root_cause for case in cases)
@@ -65,9 +66,9 @@ def test_eval_suite_persists_scoring_shape_and_trace_links(
 
         summary = run_eval_suite(session)
 
-        assert summary.total_scenarios == 5
+        assert summary.total_scenarios == 6
         assert summary.passed_scenarios >= 4
-        assert len(summary.results) == 5
+        assert len(summary.results) == 6
         assert all(result.status in {"passed", "failed"} for result in summary.results)
         assert all(0 <= result.root_cause_score <= 1 for result in summary.results)
         assert all(0 <= result.citation_quality_score <= 1 for result in summary.results)
@@ -78,7 +79,7 @@ def test_eval_suite_persists_scoring_shape_and_trace_links(
         persisted = session.scalars(
             select(EvalResult).order_by(EvalResult.created_at, EvalResult.id)
         ).all()
-        assert len(persisted) == 5
+        assert len(persisted) == 6
         assert {result.eval_run_id for result in persisted} == {summary.eval_run_id}
         assert all(result.example_output["root_cause"] for result in persisted)
         assert all(result.example_output["action_statuses"] for result in persisted)
@@ -86,7 +87,7 @@ def test_eval_suite_persists_scoring_shape_and_trace_links(
 
         run_ids = [result.agent_run_id for result in persisted]
         runs = session.scalars(select(AgentRun).where(AgentRun.id.in_(run_ids))).all()
-        assert len(runs) == 5
+        assert len(runs) == 6
         assert all(run.trace_id for run in runs)
         assert all(run.trace_url for run in runs)
         assert all(run.trace_provider in {"langfuse", "langsmith", "local"} for run in runs)
@@ -129,7 +130,7 @@ def test_latest_eval_results_ignore_incomplete_runs(
         latest = list_latest_eval_results(session)
 
         assert latest.latest_eval_run_id == summary.eval_run_id
-        assert len(latest.results) == 5
+        assert len(latest.results) == 6
 
 
 def test_action_safety_fails_when_expected_actions_are_missing() -> None:
@@ -192,7 +193,31 @@ def test_payment_method_expiration_eval_identifies_card_expiration(
             any("Retry webhook" in reason for reason in row["failure_reasons"])
             for row in failed_rows
         )
-        assert summary.passed_scenarios == 5
+        assert summary.passed_scenarios >= 5
+
+
+def test_unknown_root_cause_eval_identifies_ambiguity(
+    session_factory: Callable[[], Session],
+) -> None:
+    """The 6th scenario exercises the agent's ambiguity path: the evidence
+    should not match any specific root cause, so the agent must report
+    uncertainty rather than hallucinate a diagnosis (audit §2 caveat 2)."""
+    with session_factory() as session:
+        reseed_database(session)
+
+        summary = run_eval_suite(session)
+
+        unknown_result = next(
+            result
+            for result in summary.results
+            if result.scenario == "unknown_root_cause"
+        )
+        assert unknown_result.passed is True
+        assert unknown_result.actual_root_cause is not None
+        assert "does not prove a specific operational root cause" in (
+            unknown_result.actual_root_cause
+        )
+        assert unknown_result.root_cause_score == 1.0
 
 
 def test_eval_api_runs_suite_and_lists_latest_results(
@@ -206,6 +231,15 @@ def test_eval_api_runs_suite_and_lists_latest_results(
         with session_factory() as db:
             yield db
 
+    def enqueue_with_test_session(eval_run_id: str) -> None:
+        with session_factory() as db:
+            run_eval_suite(db, eval_run_id=eval_run_id)
+
+    monkeypatch.setattr(
+        "app.evals.router._enqueue_eval_suite",
+        enqueue_with_test_session,
+    )
+
     app.dependency_overrides[get_db] = override_get_db
     get_settings.cache_clear()
     client = TestClient(app)
@@ -218,6 +252,9 @@ def test_eval_api_runs_suite_and_lists_latest_results(
             "/evals/run",
             headers={"X-Eval-Run-Token": "eval-token"},
         )
+        run_payload = run_response.json()
+        status_response = client.get(f"/evals/runs/{run_payload['eval_run_id']}")
+        unknown_response = client.get("/evals/runs/evalrun_unknown")
         results_response = client.get("/evals/results")
     finally:
         app.dependency_overrides.clear()
@@ -225,14 +262,86 @@ def test_eval_api_runs_suite_and_lists_latest_results(
 
     assert disabled_response.status_code == 403
     assert missing_token_response.status_code == 403
-    assert run_response.status_code == 201
-    run_payload = run_response.json()
-    assert run_payload["total_scenarios"] == 5
-    assert run_payload["passed_scenarios"] >= 4
-    assert len(run_payload["results"]) == 5
+    # The run endpoint enqueues a Celery task and returns 202 immediately with
+    # a "running" stub; the actual results are polled via the status endpoint.
+    assert run_response.status_code == 202
+    assert run_payload["status"] == "running"
+    assert run_payload["completed_at"] is None
+    assert run_payload["eval_run_id"]
+
+    # With task_always_eager (test env) the monkeypatched enqueue runs the
+    # suite synchronously, so the status endpoint already sees completed rows.
+    assert status_response.status_code == 200
+    status_payload = status_response.json()
+    assert status_payload["status"] in {"passed", "failed"}
+    assert status_payload["total_scenarios"] == 6
+    assert status_payload["passed_scenarios"] >= 4
+    assert len(status_payload["results"]) == 6
+    assert status_payload["completed_at"] is not None
+
+    # Unknown eval_run_id returns 404, not a "running" stub.
+    assert unknown_response.status_code == 404
 
     assert results_response.status_code == 200
     results_payload = results_response.json()
     assert results_payload["latest_eval_run_id"] == run_payload["eval_run_id"]
-    assert len(results_payload["results"]) == 5
+    assert len(results_payload["results"]) == 6
     assert all("root_cause_score" in result for result in results_payload["results"])
+
+
+def test_eval_suite_persists_failed_result_when_one_case_raises(
+    session_factory: Callable[[], Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with session_factory() as session:
+        reseed_database(session)
+        cases = session.scalars(select(EvalCase).order_by(EvalCase.id)).all()
+        failing_incident_id = cases[0].incident_id
+        failing_scenario = cases[0].scenario
+        total_cases = len(cases)
+
+    original_start = start_investigation_run
+
+    def flaky_start(session: Session, incident_id: str, *, force: bool = False):
+        if incident_id == failing_incident_id:
+            raise RuntimeError("simulated investigation failure")
+        return original_start(session, incident_id, force=force)
+
+    monkeypatch.setattr("app.evals.runner.start_investigation_run", flaky_start)
+
+    with session_factory() as session:
+        summary = run_eval_suite(session)
+
+    # The suite must complete (not raise 500) and persist a result for every case.
+    assert summary.total_scenarios == total_cases
+    failed_results = [result for result in summary.results if not result.passed]
+    assert len(failed_results) == 1
+    failed = failed_results[0]
+    assert failed.scenario == failing_scenario
+    assert failed.actual_root_cause is None
+    assert failed.root_cause_score == 0.0
+    assert failed.failure_reasons
+    assert any(
+        "simulated investigation failure" in reason for reason in failed.failure_reasons
+    )
+
+    # The other cases must still be scored normally.
+    assert len([result for result in summary.results if result.passed]) == total_cases - 1
+
+    # Every result -- including the failed one -- must be persisted.
+    with session_factory() as session:
+        persisted = session.scalars(
+            select(EvalResult).where(EvalResult.eval_run_id == summary.eval_run_id)
+        ).all()
+        assert len(persisted) == total_cases
+        failed_persisted = next(
+            result for result in persisted if result.scenario == failing_scenario
+        )
+        assert failed_persisted.passed is False
+        assert failed_persisted.failure_reasons
+        # The failed case must reference a recorded failed agent run so the dead
+        # end is visible in run history, not silently dropped.
+        failed_run = session.get(AgentRun, failed_persisted.agent_run_id)
+        assert failed_run is not None
+        assert failed_run.status == "failed"
+        assert "simulated investigation failure" in (failed_run.error or "")

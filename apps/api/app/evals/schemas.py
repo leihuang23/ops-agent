@@ -46,12 +46,12 @@ class EvalResultRead(BaseModel):
 
 class EvalRunSummary(BaseModel):
     eval_run_id: str
-    status: Literal["passed", "failed"]
+    status: Literal["passed", "failed", "running"]
     total_scenarios: int
     passed_scenarios: int
     failed_scenarios: int
     started_at: datetime
-    completed_at: datetime
+    completed_at: datetime | None = None
     results: list[EvalResultRead] = Field(default_factory=list)
 
 

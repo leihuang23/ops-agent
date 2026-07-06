@@ -1,10 +1,14 @@
-from fastapi import APIRouter
+import logging
+
+from fastapi import APIRouter, Response
 from pydantic import BaseModel
 from redis import Redis
 from sqlalchemy import text
 
 from app.core.config import get_settings
 from app.db.session import engine
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["health"])
 
@@ -31,20 +35,54 @@ def health() -> HealthResponse:
 
 
 @router.get("/ready")
-def ready() -> ReadinessResponse:
+def ready(response: Response) -> ReadinessResponse:
+    """Check both Postgres and Redis dependencies independently.
+
+    Each check is isolated so that one failing dependency does not mask the
+    status of the other. If any check fails, the response is 503 with the
+    failing check's error message surfaced in the body so operators can see
+    *which* dependency is unhealthy without reading server logs.
+    """
     settings = get_settings()
 
-    with engine.connect() as connection:
-        connection.execute(text("select 1"))
+    postgres_status = _check_postgres()
+    redis_status = _check_redis(settings.redis_url)
 
-    redis_client = Redis.from_url(settings.redis_url)
-    redis_client.ping()
+    overall = "ok" if postgres_status == "ok" and redis_status == "ok" else "unhealthy"
+    if overall != "ok":
+        response.status_code = 503
 
     return ReadinessResponse(
-        status="ok",
+        status=overall,
         service=settings.app_name,
         version=settings.app_version,
-        postgres="ok",
-        redis="ok",
+        postgres=postgres_status,
+        redis=redis_status,
     )
+
+
+def _check_postgres() -> str:
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("select 1"))
+    except Exception as exc:
+        logger.error("Postgres health check failed: %s", exc)
+        return "error"
+    return "ok"
+
+
+def _check_redis(redis_url: str) -> str:
+    try:
+        redis_client = Redis.from_url(redis_url, socket_connect_timeout=2)
+    except Exception as exc:
+        logger.error("Redis from_url failed: %s", exc)
+        return "error"
+    try:
+        redis_client.ping()
+    except Exception as exc:
+        logger.error("Redis ping failed: %s", exc)
+        return "error"
+    finally:
+        redis_client.close()
+    return "ok"
 

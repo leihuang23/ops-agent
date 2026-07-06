@@ -124,6 +124,26 @@ SCENARIOS: Final[dict[str, dict[str, object]]] = {
             "audit card-expiration notices",
         ],
     },
+    "unknown_root_cause": {
+        "account_numbers": {37, 38, 39, 40, 41, 42},
+        "root_cause": (
+            "MRR dropped after failed renewals, but the available evidence does not "
+            "prove a specific operational root cause."
+        ),
+        "expected_evidence": [
+            "June failed invoices",
+            "billing support tickets",
+        ],
+        "expected_evidence_types": ["sql", "ticket"],
+        "false_leads": [
+            "billing retry webhook regression",
+            "expired payment methods",
+            "CSV import instability",
+            "report export filter bug",
+            "enterprise churn",
+        ],
+        "recommended_actions": [],
+    },
 }
 SCENARIO_ACCOUNT_NUMBERS: Final[dict[str, set[int]]] = {
     scenario: metadata["account_numbers"] for scenario, metadata in SCENARIOS.items()
@@ -352,15 +372,17 @@ def build_invoices(subscriptions: list[Subscription]) -> list[Invoice]:
             if period_start == date(2026, 6, 1) and scenario in {
                 "checkout_retry_regression",
                 "payment_method_expiration",
+                "unknown_root_cause",
             }:
                 if scenario == "checkout_retry_regression":
                     invoice_date = date(2026, 6, 5)
                 status = "failed"
-                failure_reason = (
-                    "Retry webhook regression suppressed second charge attempt"
-                    if scenario == "checkout_retry_regression"
-                    else "Expired cards were not refreshed before renewal"
-                )
+                if scenario == "checkout_retry_regression":
+                    failure_reason = "Retry webhook regression suppressed second charge attempt"
+                elif scenario == "payment_method_expiration":
+                    failure_reason = "Expired cards were not refreshed before renewal"
+                else:
+                    failure_reason = "Processor declined during settlement; pending manual review"
                 source_scenario = scenario
             elif period_start == date(2026, 5, 1) and scenario == "checkout_retry_regression":
                 invoice_date = date(2026, 5, 29)
@@ -416,6 +438,13 @@ def build_product_events() -> list[ProductEvent]:
             days_back = 31 + event_number % 21
 
         event_name = event_names[event_number % len(event_names)]
+        if scenario == "unknown_root_cause" and event_name in {"import_failed", "report_export"}:
+            # Avoid leaking CSV-import / report-export signals into the doc query
+            # for the ambiguity scenario; otherwise knowledge search returns docs
+            # whose titles contain "csv"+"import" or "report"+"export", which
+            # would trigger a specific diagnosis instead of the intended
+            # uncertainty fallthrough.
+            event_name = "dashboard_view"
         source_scenario = None
         if (
             scenario == "usage_drop_after_import_outage"
@@ -520,6 +549,17 @@ def build_support_tickets() -> list[SupportTicket]:
                 subject = "Card expiration notice did not reach billing owner"
                 description = (
                     "Billing owner missed expiration notices before the June renewal."
+                )
+            elif scenario == "unknown_root_cause" and local_ticket_number <= 2:
+                status = "open"
+                priority = "normal"
+                category = "billing"
+                source_scenario = scenario
+                days_back = 4 + local_ticket_number
+                subject = "Billing question about recent invoice changes"
+                description = (
+                    "Customer is asking about unexpected changes on their recent "
+                    "billing statement."
                 )
 
             created_at = DATASET_ANCHOR - timedelta(days=days_back, hours=local_ticket_number)
@@ -675,7 +715,7 @@ def scenario_affected_accounts(
     ).all()
     failed_start = (
         date(2026, 6, 1)
-        if scenario == "payment_method_expiration"
+        if scenario in {"payment_method_expiration", "unknown_root_cause"}
         else current_start
     )
     failed_invoices = session.scalars(
@@ -726,6 +766,7 @@ def scenario_incident_title(scenario: str) -> str:
         "usage_drop_after_import_outage": "Usage activity dropped after CSV import instability",
         "support_backlog_export_bug": "Support backlog increased after report export bug",
         "payment_method_expiration": "Renewal MRR dropped after payment method expirations",
+        "unknown_root_cause": "Paid MRR dropped with mixed renewal signals across accounts",
     }
     return titles[scenario]
 
@@ -749,6 +790,9 @@ def scenario_incident_summary(scenario: str) -> str:
         "payment_method_expiration": (
             "June renewal invoices failed for accounts whose billing owners missed card "
             "expiration notices."
+        ),
+        "unknown_root_cause": (
+            "Several accounts show failed June renewals without a clear operational pattern."
         ),
     }
     return summaries[scenario]
@@ -779,6 +823,10 @@ def scenario_source_queries(scenario: str) -> list[str]:
         "payment_method_expiration": [
             "failed June renewal invoices grouped by account",
             "billing tickets mentioning expired cards and missed expiration notices",
+        ],
+        "unknown_root_cause": [
+            "failed June renewal invoices grouped by account",
+            "billing support tickets for accounts with failed renewals",
         ],
     }
     return common_queries + scenario_queries[scenario]

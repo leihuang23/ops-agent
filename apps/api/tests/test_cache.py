@@ -1,10 +1,20 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterator
 
 import pytest
 
-from app.cache import Cache, cache_result
+from app.cache import Cache, cache_result, _reset_redis_client
+
+
+@pytest.fixture(autouse=True)
+def _isolate_cache_singleton() -> Iterator[None]:
+    """Ensure each test starts with a fresh Redis singleton so monkeypatches
+    on ``redis.Redis.from_url`` take effect deterministically."""
+    _reset_redis_client()
+    yield
+    _reset_redis_client()
 
 
 @pytest.fixture
@@ -41,6 +51,22 @@ def test_cache_idempotency_round_trip(cache: Cache) -> None:
     assert cache.get_idempotency_value(key) is None
     cache.set_idempotency_value(key, "run_123", ttl_seconds=10)
     assert cache.get_idempotency_value(key) == "run_123"
+
+
+def test_cache_uses_shared_memory_fallback_when_redis_is_unavailable(
+    monkeypatch,
+) -> None:
+    def raise_connection_error(*args, **kwargs):
+        raise OSError("redis unavailable")
+
+    import redis
+
+    monkeypatch.setattr(redis.Redis, "from_url", raise_connection_error)
+    key = f"test:memory-fallback:{uuid.uuid4()}"
+
+    Cache().set(key, {"value": 99}, ttl_seconds=10)
+
+    assert Cache().get(key) == {"value": 99}
 
 
 def test_cache_result_decorator_uses_cache(cache: Cache) -> None:
@@ -86,3 +112,17 @@ def test_cache_result_decorator_with_dump_and_load(cache: Cache) -> None:
     assert second.count == 1
     assert call_count == 1
     cache.delete(key)
+
+
+def test_cache_reuses_shared_client_across_instances() -> None:
+    """Cache() must reuse a module-level Redis client rather than constructing
+    (and pinging) a new one on every call (audit P1 #3)."""
+    from app.cache import _reset_redis_client
+
+    _reset_redis_client()
+    try:
+        cache_a = Cache()
+        cache_b = Cache()
+        assert cache_a._client is cache_b._client
+    finally:
+        _reset_redis_client()

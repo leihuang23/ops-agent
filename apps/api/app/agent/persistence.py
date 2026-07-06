@@ -20,6 +20,8 @@ def utcnow_naive() -> datetime:
 
 
 class AgentRunRecorder:
+    _COMMIT_EVERY = 5
+
     def __init__(
         self, session: Session, run: AgentRun, trace: AgentTraceHandle | None = None
     ) -> None:
@@ -27,6 +29,7 @@ class AgentRunRecorder:
         self.run = run
         self.trace = trace
         self._next_sequence: int | None = None
+        self._steps_since_commit = 0
 
     def record(
         self,
@@ -38,15 +41,29 @@ class AgentRunRecorder:
     ) -> T:
         step = self._start_step(stage=stage, tool_name=tool_name, inputs=inputs)
         try:
-            if self.trace is not None:
-                output = self.trace.record_child(
-                    name=tool_name or stage,
-                    run_type="tool" if tool_name else "chain",
-                    inputs=inputs,
-                    action=action,
-                )
-            else:
-                output = action()
+            # Wrap the action in a SAVEPOINT so that DB changes made by a
+            # failing action are rolled back without discarding previously
+            # flushed (or committed) steps in the outer transaction. Some
+            # action callables (e.g. propose_actions_for_report) call
+            # session.commit() internally, which releases the SAVEPOINT; guard
+            # with is_active so we don't touch a closed transaction.
+            savepoint = self.session.begin_nested()
+            try:
+                if self.trace is not None:
+                    output = self.trace.record_child(
+                        name=tool_name or stage,
+                        run_type="tool" if tool_name else "chain",
+                        inputs=inputs,
+                        action=action,
+                    )
+                else:
+                    output = action()
+                if savepoint.is_active:
+                    savepoint.commit()
+            except Exception:
+                if savepoint.is_active:
+                    savepoint.rollback()
+                raise
         except Exception as exc:
             self._fail_step(step.id, exc)
             raise
@@ -78,7 +95,7 @@ class AgentRunRecorder:
         )
         self.session.add(step)
         self._touch_run_heartbeat()
-        self.session.commit()
+        self.session.flush()
         return step
 
     def _allocate_sequence(self) -> int:
@@ -106,10 +123,20 @@ class AgentRunRecorder:
         step.outputs = jsonable_encoder(output)
         step.completed_at = now
         self._touch_run_heartbeat()
-        self.session.commit()
+        self.session.flush()
+        self._maybe_commit()
+
+    def _maybe_commit(self) -> None:
+        self._steps_since_commit += 1
+        if self._steps_since_commit >= self._COMMIT_EVERY:
+            self.session.commit()
+            self._steps_since_commit = 0
 
     def _fail_step(self, step_id: str, exc: Exception) -> None:
-        self.session.rollback()
+        # The SAVEPOINT in record() already rolled back the action's changes.
+        # The step row was flushed before the SAVEPOINT, so it survives and
+        # we can update it in place. Always commit failures immediately so
+        # they are visible in the run history without waiting for a batch.
         now = utcnow_naive()
         step = self.session.get(AgentRunStep, step_id)
         if step is not None:
@@ -118,3 +145,4 @@ class AgentRunRecorder:
             step.completed_at = now
             self._touch_run_heartbeat()
             self.session.commit()
+            self._steps_since_commit = 0

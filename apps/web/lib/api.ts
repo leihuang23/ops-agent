@@ -185,6 +185,22 @@ export type AccountDetail = {
   product_event_summary: AccountProductEventSummary[];
 };
 
+export type AccountListItem = {
+  id: string;
+  name: string;
+  segment: string;
+  industry: string;
+  region: string;
+  health_score: number;
+  source_scenario: string | null;
+  is_active: boolean;
+};
+
+export type AccountList = {
+  total: number;
+  accounts: AccountListItem[];
+};
+
 export type SupportSignal = {
   ticket_id: string;
   account_id: string;
@@ -231,6 +247,11 @@ export type IncidentSummary = {
   affected_account_count: number;
 };
 
+export type IncidentList = {
+  total: number;
+  incidents: IncidentSummary[];
+};
+
 export type IncidentDetail = {
   id: string;
   title: string;
@@ -267,8 +288,12 @@ export type AccountDetailResult =
   | { ok: true; data: AccountDetail }
   | { ok: false; error: string };
 
+export type AccountListResult =
+  | { ok: true; data: AccountList }
+  | { ok: false; error: string };
+
 export type IncidentListResult =
-  | { ok: true; data: IncidentSummary[] }
+  | { ok: true; data: IncidentList }
   | { ok: false; error: string };
 
 export type CreateIncidentFromAnomalyResult =
@@ -470,7 +495,7 @@ export type AgentRunListResult =
   | { ok: true; data: AgentRunSummary[] }
   | { ok: false; error: string };
 
-export type EvalStatus = 'passed' | 'failed';
+export type EvalStatus = 'passed' | 'failed' | 'running';
 
 export type EvalResult = {
   id: string;
@@ -505,7 +530,7 @@ export type EvalRunSummary = {
   passed_scenarios: number;
   failed_scenarios: number;
   started_at: string;
-  completed_at: string;
+  completed_at: string | null;
   results: EvalResult[];
 };
 
@@ -529,6 +554,10 @@ export type ApprovalDecisionResult =
   | { ok: true; data: ApprovalRequest }
   | { ok: false; error: string };
 
+type DemoOperatorOptions = {
+  demoOperatorToken?: string;
+};
+
 async function readErrorMessage(response: Response, fallback: string): Promise<string> {
   try {
     const body = (await response.json()) as { detail?: unknown };
@@ -538,6 +567,15 @@ async function readErrorMessage(response: Response, fallback: string): Promise<s
   } catch {}
 
   return fallback;
+}
+
+function demoOperatorHeaders(token: string | undefined): Record<string, string> {
+  if (!token) {
+    return {};
+  }
+  return {
+    'X-Demo-Operator-Token': token,
+  };
 }
 
 export async function getHealth(): Promise<HealthResponse> {
@@ -612,12 +650,14 @@ export async function getRevenueAnomalies(): Promise<RevenueAnomaliesResult> {
 
 export async function createIncidentFromAnomaly(
   anomalyId: string,
+  options: DemoOperatorOptions = {},
 ): Promise<CreateIncidentFromAnomalyResult> {
   try {
     const response = await fetch(`${resolveApiBaseUrl()}/incidents`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...demoOperatorHeaders(options.demoOperatorToken),
       },
       body: JSON.stringify({ anomaly_id: anomalyId }),
       cache: 'no-store',
@@ -645,9 +685,20 @@ export async function createIncidentFromAnomaly(
   }
 }
 
-export async function listIncidents(): Promise<IncidentListResult> {
+export async function listIncidents(
+  options: { limit?: number; offset?: number } = {},
+): Promise<IncidentListResult> {
   try {
-    const response = await fetch(`${resolveApiBaseUrl()}/incidents`, {
+    const params = new URLSearchParams();
+    if (options.limit !== undefined) {
+      params.set('limit', String(options.limit));
+    }
+    if (options.offset !== undefined) {
+      params.set('offset', String(options.offset));
+    }
+    const query = params.toString();
+    const url = `${resolveApiBaseUrl()}/incidents${query ? `?${query}` : ''}`;
+    const response = await fetch(url, {
       cache: 'no-store',
     });
 
@@ -660,7 +711,7 @@ export async function listIncidents(): Promise<IncidentListResult> {
 
     return {
       ok: true,
-      data: (await response.json()) as IncidentSummary[],
+      data: (await response.json()) as IncidentList,
     };
   } catch (error) {
     return {
@@ -720,15 +771,41 @@ export async function getAccount(accountId: string): Promise<AccountDetailResult
   }
 }
 
+export async function listAccounts(): Promise<AccountListResult> {
+  try {
+    const response = await fetch(`${resolveApiBaseUrl()}/accounts`, {
+      cache: 'no-store',
+    });
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        error: `Accounts endpoint returned HTTP ${response.status}`,
+      };
+    }
+
+    return {
+      ok: true,
+      data: (await response.json()) as AccountList,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : 'Accounts endpoint unavailable',
+    };
+  }
+}
+
 export async function startInvestigation(
   incidentId: string,
-  options: { runInline?: boolean } = {},
+  options: { runInline?: boolean } & DemoOperatorOptions = {},
 ): Promise<StartInvestigationResult> {
   try {
     const response = await fetch(`${resolveApiBaseUrl()}/agent/investigations`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...demoOperatorHeaders(options.demoOperatorToken),
       },
       body: JSON.stringify({
         incident_id: incidentId,
@@ -983,27 +1060,31 @@ export async function getSupportTicket(ticketId: string): Promise<SupportTicketD
 export async function approveApprovalRequest(
   approvalId: string,
   notes?: string,
+  options: DemoOperatorOptions = {},
 ): Promise<ApprovalDecisionResult> {
-  return submitApprovalDecision(approvalId, 'approve', notes);
+  return submitApprovalDecision(approvalId, 'approve', notes, options);
 }
 
 export async function rejectApprovalRequest(
   approvalId: string,
   notes?: string,
+  options: DemoOperatorOptions = {},
 ): Promise<ApprovalDecisionResult> {
-  return submitApprovalDecision(approvalId, 'reject', notes);
+  return submitApprovalDecision(approvalId, 'reject', notes, options);
 }
 
 async function submitApprovalDecision(
   approvalId: string,
   decision: 'approve' | 'reject',
   notes?: string,
+  options: DemoOperatorOptions = {},
 ): Promise<ApprovalDecisionResult> {
   try {
     const response = await fetch(`${resolveApiBaseUrl()}/approvals/${approvalId}/${decision}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...demoOperatorHeaders(options.demoOperatorToken),
       },
       body: JSON.stringify({ notes }),
       cache: 'no-store',

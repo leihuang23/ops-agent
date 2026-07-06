@@ -39,6 +39,14 @@ test.describe('demo flow', () => {
     await expect(page.getByRole('heading', { name: 'Investigation eval report' })).toBeVisible();
     await page.locator('button:has-text("Run Suite")').click();
     await page.waitForURL('/evals');
-    await expect(page.locator('text=passed / 0 failed')).toBeVisible({ timeout: 120000 });
+    // The eval suite runs asynchronously via Celery and the evals page is
+    // server-side rendered, so it will not update until reloaded.  Poll by
+    // reloading the page until the summary line appears.
+    await expect(async () => {
+      await page.reload();
+      await expect(page.getByText(/\d[\d,]* passed \/ \d[\d,]* failed/)).toBeVisible({
+        timeout: 5000,
+      });
+    }).toPass({ timeout: 120000 });
   });
 });

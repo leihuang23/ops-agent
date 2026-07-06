@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 from time import perf_counter
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from fastapi.encoders import jsonable_encoder
@@ -17,7 +17,7 @@ from app.agent.schemas import AgentRunDetail
 from app.agent.service import start_investigation_run
 from app.db.session import SessionLocal
 from app.evals.schemas import EvalResultsReport, EvalResultRead, EvalRunSummary
-from app.models import EvalCase, EvalResult
+from app.models import AgentRun, EvalCase, EvalResult
 
 PASSING_SCENARIO_THRESHOLD = 4
 EXPECTED_REPORT_ACTION_TYPES = {
@@ -44,34 +44,58 @@ MARKER_STOPWORDS = {
 MONTH_TOKEN_ALIASES = {"june": "06"}
 
 
-def run_eval_suite(session: Session) -> EvalRunSummary:
+def run_eval_suite(
+    session: Session, *, eval_run_id: str | None = None
+) -> EvalRunSummary:
     cases = session.scalars(select(EvalCase).order_by(EvalCase.id)).all()
     started_at = utcnow_naive()
-    eval_run_id = f"evalrun_{uuid4().hex[:16]}"
+    if eval_run_id is None:
+        eval_run_id = f"evalrun_{uuid4().hex[:16]}"
     pending_results: list[EvalResult] = []
 
     for case in cases:
         case_start = utcnow_naive()
         latency_start = perf_counter()
-        run_detail, _created = start_investigation_run(
-            session,
-            case.incident_id,
-            force=True,
-        )
-        latency_ms = int((perf_counter() - latency_start) * 1000)
-        case_completed = utcnow_naive()
-        result = _build_eval_result(
-            eval_run_id=eval_run_id,
-            case=case,
-            run_detail=run_detail,
-            latency_ms=latency_ms,
-            started_at=case_start,
-            completed_at=case_completed,
-        )
+        try:
+            run_detail, _created = start_investigation_run(
+                session,
+                case.incident_id,
+                force=True,
+            )
+            latency_ms = int((perf_counter() - latency_start) * 1000)
+            case_completed = utcnow_naive()
+            result = _build_eval_result(
+                eval_run_id=eval_run_id,
+                case=case,
+                run_detail=run_detail,
+                latency_ms=latency_ms,
+                started_at=case_start,
+                completed_at=case_completed,
+            )
+        except Exception as exc:
+            latency_ms = int((perf_counter() - latency_start) * 1000)
+            case_completed = utcnow_naive()
+            failed_run = _record_failed_agent_run(
+                session,
+                incident_id=case.incident_id,
+                error=str(exc),
+                started_at=case_start,
+                completed_at=case_completed,
+            )
+            result = _build_failed_eval_result(
+                eval_run_id=eval_run_id,
+                case=case,
+                failed_run=failed_run,
+                error=str(exc),
+                latency_ms=latency_ms,
+                started_at=case_start,
+                completed_at=case_completed,
+            )
+        # Persist each result incrementally so that a Celery timeout or
+        # process crash does not lose already-completed cases.
+        session.add(result)
+        session.commit()
         pending_results.append(result)
-
-    session.add_all(pending_results)
-    session.commit()
     results: list[EvalResultRead] = []
     for result in pending_results:
         session.refresh(result)
@@ -141,6 +165,56 @@ def list_latest_eval_results(session: Session) -> EvalResultsReport:
     )
 
 
+def build_eval_run_summary(
+    session: Session, eval_run_id: str
+) -> EvalRunSummary | None:
+    """Reconstruct an ``EvalRunSummary`` from persisted ``EvalResult`` rows.
+
+    Returns ``None`` when no results exist for ``eval_run_id`` (the run was
+    never enqueued, or the ID is unknown). Returns a ``running`` summary when
+    only a partial set of results has been persisted (the Celery task is still
+    in flight). Returns ``passed``/``failed`` once all expected cases have a
+    persisted result.
+    """
+    expected_case_count = int(
+        session.scalar(select(func.count(EvalCase.id)).select_from(EvalCase)) or 0
+    )
+    results = session.scalars(
+        select(EvalResult)
+        .where(EvalResult.eval_run_id == eval_run_id)
+        .order_by(EvalResult.scenario)
+    ).all()
+    if not results:
+        return None
+
+    result_reads = [eval_result_to_read(result) for result in results]
+    passed_scenarios = sum(result.passed for result in result_reads)
+    failed_scenarios = len(result_reads) - passed_scenarios
+    started_at = min(result.started_at for result in results)
+    is_complete = (
+        expected_case_count > 0 and len(result_reads) >= expected_case_count
+    )
+    completed_at = (
+        max(result.completed_at for result in results) if is_complete else None
+    )
+    if not is_complete:
+        status: Literal["passed", "failed", "running"] = "running"
+    elif passed_scenarios >= PASSING_SCENARIO_THRESHOLD:
+        status = "passed"
+    else:
+        status = "failed"
+    return EvalRunSummary(
+        eval_run_id=eval_run_id,
+        status=status,
+        total_scenarios=len(result_reads),
+        passed_scenarios=passed_scenarios,
+        failed_scenarios=failed_scenarios,
+        started_at=started_at,
+        completed_at=completed_at,
+        results=result_reads,
+    )
+
+
 def _build_eval_result(
     *,
     eval_run_id: str,
@@ -176,6 +250,93 @@ def _build_eval_result(
         created_at=now,
     )
     return result
+
+
+def _record_failed_agent_run(
+    session: Session,
+    *,
+    incident_id: str,
+    error: str,
+    started_at: datetime,
+    completed_at: datetime,
+) -> AgentRun:
+    """Persist a failed AgentRun so the eval dead end is visible in run history.
+
+    EvalResult.agent_run_id is a non-nullable FK, so a failed case still needs
+    a valid agent run target. Recording the failure (rather than silently
+    dropping it) keeps the investigation dead end auditable.
+    """
+    now = utcnow_naive()
+    failed_run = AgentRun(
+        id=f"run_failed_{uuid4().hex[:16]}",
+        incident_id=incident_id,
+        status="failed",
+        trace_id=None,
+        trace_url=None,
+        trace_provider=None,
+        trace_metadata={},
+        input_payload={"incident_id": incident_id},
+        final_report=None,
+        token_estimate=0,
+        prompt_tokens=0,
+        completion_tokens=0,
+        cost_estimate_usd=0.0,
+        error=error,
+        started_at=started_at,
+        completed_at=completed_at,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(failed_run)
+    session.flush()
+    return failed_run
+
+
+def _build_failed_eval_result(
+    *,
+    eval_run_id: str,
+    case: EvalCase,
+    failed_run: AgentRun,
+    error: str,
+    latency_ms: int,
+    started_at: datetime,
+    completed_at: datetime,
+) -> EvalResult:
+    now = utcnow_naive()
+    return EvalResult(
+        id=f"evalres_{uuid4().hex[:16]}",
+        eval_run_id=eval_run_id,
+        eval_case_id=case.id,
+        agent_run_id=failed_run.id,
+        scenario=case.scenario,
+        status="failed",
+        passed=False,
+        root_cause_score=0.0,
+        citation_quality_score=0.0,
+        action_safety_score=1.0,
+        latency_ms=latency_ms,
+        expected_root_cause=case.expected_root_cause,
+        actual_root_cause=None,
+        expected_evidence_types=list(case.expected_evidence_types),
+        observed_evidence_types=[],
+        failure_reasons=[error],
+        example_output={
+            "run_id": failed_run.id,
+            "status": "failed",
+            "trace_id": failed_run.trace_id,
+            "trace_url": failed_run.trace_url,
+            "trace_provider": failed_run.trace_provider,
+            "root_cause": None,
+            "confidence": None,
+            "citation_count": 0,
+            "affected_account_count": 0,
+            "action_statuses": [],
+            "error": error,
+        },
+        started_at=started_at,
+        completed_at=completed_at,
+        created_at=now,
+    )
 
 
 def score_eval_case(case: EvalCase, run_detail: AgentRunDetail) -> dict[str, Any]:

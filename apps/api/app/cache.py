@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import time
+from fnmatch import fnmatch
 from functools import wraps
 from typing import Callable, ParamSpec, TypeVar
 
@@ -13,6 +15,84 @@ R = TypeVar("R")
 
 DEFAULT_REDIS_URL = "redis://localhost:6379/0"
 
+_LOCAL_CACHE_VALUES: dict[str, tuple[float, str]] = {}
+
+# Module-level singleton: lazily initialized on first use, then reused across
+# all Cache() instances so we don't pay a ping() round-trip on every call.
+_redis_client: "redis.Redis | _LocalMemoryCache | None" = None
+
+
+def _get_redis_client() -> "redis.Redis | _LocalMemoryCache":
+    """Return the shared Redis client, initializing it once on first call.
+
+    If Redis is unreachable, falls back to ``_LocalMemoryCache`` and caches
+    that decision so subsequent callers don't retry the 2s connect timeout.
+    A periodic health check (``ping``) detects dead connections and triggers
+    re-initialization so the cache recovers automatically after a Redis
+    restart or network blip.
+    """
+    global _redis_client
+    if _redis_client is not None:
+        # For a live Redis client, verify the connection is still usable.
+        # _LocalMemoryCache never needs a health check.
+        if not isinstance(_redis_client, _LocalMemoryCache):
+            try:
+                _redis_client.ping()
+                return _redis_client
+            except Exception:
+                # Connection is dead -- clear and re-initialize below.
+                _redis_client = None
+        else:
+            return _redis_client
+    url = get_settings().redis_url
+    try:
+        client = redis.Redis.from_url(
+            url, decode_responses=True, socket_connect_timeout=2
+        )
+        client.ping()
+        _redis_client = client
+    except Exception:
+        _redis_client = _LocalMemoryCache()
+    return _redis_client
+
+
+def _reset_redis_client() -> None:
+    """Clear the shared client and local cache (for deterministic test isolation)."""
+    global _redis_client
+    _redis_client = None
+    _LOCAL_CACHE_VALUES.clear()
+
+
+class _LocalMemoryCache:
+    """Small Redis-like fallback for local tests and Redis outages."""
+
+    def get(self, key: str) -> str | None:
+        item = _LOCAL_CACHE_VALUES.get(key)
+        if item is None:
+            return None
+        expires_at, value = item
+        if expires_at <= time.monotonic():
+            _LOCAL_CACHE_VALUES.pop(key, None)
+            return None
+        return value
+
+    def setex(self, key: str, ttl_seconds: int, value: str) -> None:
+        _LOCAL_CACHE_VALUES[key] = (time.monotonic() + ttl_seconds, value)
+
+    def delete(self, key: str) -> int:
+        existed = key in _LOCAL_CACHE_VALUES
+        _LOCAL_CACHE_VALUES.pop(key, None)
+        return int(existed)
+
+    def scan_iter(self, match: str):
+        now = time.monotonic()
+        for key, (expires_at, _) in list(_LOCAL_CACHE_VALUES.items()):
+            if expires_at <= now:
+                _LOCAL_CACHE_VALUES.pop(key, None)
+                continue
+            if fnmatch(key, match):
+                yield key
+
 
 class Cache:
     """Redis-backed cache helper with JSON serialization.
@@ -22,20 +102,18 @@ class Cache:
     """
 
     def __init__(self, url: str | None = None) -> None:
-        url = url or get_settings().redis_url
-        self._disabled = False
-        try:
-            self._client: redis.Redis = redis.Redis.from_url(
-                url, decode_responses=True, socket_connect_timeout=2
-            )
-            self._client.ping()
-        except Exception:
-            self._disabled = True
-            self._client = None  # type: ignore[assignment]
+        if url is not None:
+            try:
+                self._client: redis.Redis | _LocalMemoryCache = redis.Redis.from_url(
+                    url, decode_responses=True, socket_connect_timeout=2
+                )
+                self._client.ping()
+            except Exception:
+                self._client = _LocalMemoryCache()
+        else:
+            self._client = _get_redis_client()
 
     def get(self, key: str) -> dict[str, object] | None:
-        if self._disabled:
-            return None
         try:
             value = self._client.get(key)
         except Exception:
@@ -47,24 +125,18 @@ class Cache:
     def set(
         self, key: str, value: dict[str, object], ttl_seconds: int
     ) -> None:
-        if self._disabled:
-            return
         try:
             self._client.setex(key, ttl_seconds, json.dumps(value))
         except Exception:
             return
 
     def delete(self, key: str) -> None:
-        if self._disabled:
-            return
         try:
             self._client.delete(key)
         except Exception:
             return
 
     def delete_pattern(self, pattern: str) -> int:
-        if self._disabled:
-            return 0
         deleted = 0
         try:
             for key in self._client.scan_iter(match=pattern):
@@ -74,8 +146,6 @@ class Cache:
         return deleted
 
     def get_idempotency_value(self, key: str) -> str | None:
-        if self._disabled:
-            return None
         try:
             return self._client.get(f"idempotency:{key}")
         except Exception:
@@ -84,8 +154,6 @@ class Cache:
     def set_idempotency_value(
         self, key: str, value: str, ttl_seconds: int
     ) -> None:
-        if self._disabled:
-            return
         try:
             self._client.setex(f"idempotency:{key}", ttl_seconds, value)
         except Exception:

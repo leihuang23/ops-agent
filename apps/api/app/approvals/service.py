@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.agent.persistence import utcnow_naive
@@ -248,15 +248,30 @@ def approve_request(
     approval = session.get(ApprovalRequest, approval_id)
     if approval is None:
         raise LookupError(f"Unknown approval request id: {approval_id}")
-    if approval.status != "pending":
-        raise ValueError(f"Approval request {approval_id} has already been {approval.status}")
 
     now = utcnow_naive()
+    claim = session.execute(
+        update(ApprovalRequest)
+        .where(
+            ApprovalRequest.id == approval_id,
+            ApprovalRequest.status == "pending",
+        )
+        .values(
+            status="approved",
+            decided_by=APPROVER_ACTOR,
+            decision_notes=payload.notes,
+            decided_at=now,
+        )
+    )
+    if claim.rowcount != 1:
+        session.rollback()
+        current = session.get(ApprovalRequest, approval_id)
+        current_status = current.status if current is not None else "unknown"
+        raise ValueError(
+            f"Approval request {approval_id} has already been {current_status}"
+        )
+
     action = approval.action
-    approval.status = "approved"
-    approval.decided_by = APPROVER_ACTOR
-    approval.decision_notes = payload.notes
-    approval.decided_at = now
     action.status = "executed"
     action.executed_at = now
     action.updated_at = now
@@ -294,15 +309,30 @@ def reject_request(
     approval = session.get(ApprovalRequest, approval_id)
     if approval is None:
         raise LookupError(f"Unknown approval request id: {approval_id}")
-    if approval.status != "pending":
-        raise ValueError(f"Approval request {approval_id} has already been {approval.status}")
 
     now = utcnow_naive()
+    claim = session.execute(
+        update(ApprovalRequest)
+        .where(
+            ApprovalRequest.id == approval_id,
+            ApprovalRequest.status == "pending",
+        )
+        .values(
+            status="rejected",
+            decided_by=APPROVER_ACTOR,
+            decision_notes=payload.notes,
+            decided_at=now,
+        )
+    )
+    if claim.rowcount != 1:
+        session.rollback()
+        current = session.get(ApprovalRequest, approval_id)
+        current_status = current.status if current is not None else "unknown"
+        raise ValueError(
+            f"Approval request {approval_id} has already been {current_status}"
+        )
+
     action = approval.action
-    approval.status = "rejected"
-    approval.decided_by = APPROVER_ACTOR
-    approval.decision_notes = payload.notes
-    approval.decided_at = now
     action.status = "rejected"
     action.updated_at = now
 

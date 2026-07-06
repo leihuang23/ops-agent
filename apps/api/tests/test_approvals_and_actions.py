@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm.attributes import set_committed_value
 
 import app.models  # noqa: F401
 from app.agent.schemas import (
@@ -14,11 +15,12 @@ from app.agent.schemas import (
     ReportAffectedAccount,
     ReportEvidence,
 )
-from app.approvals.service import propose_actions_for_report
+from app.approvals.schemas import ApprovalDecisionCreate
+from app.approvals.service import approve_request, propose_actions_for_report, reject_request
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
-from app.models import AgentRun, Incident, MockAction
+from app.models import ActionAuditEvent, AgentRun, ApprovalRequest, Incident, MockAction
 from app.seed import reseed_database
 
 
@@ -385,3 +387,165 @@ def sample_report(
         ],
         generated_at=datetime(2026, 6, 9, 12, 35, 0),
     )
+
+
+def _seed_pending_high_risk_approval(
+    session_factory: Callable[[], Session],
+    *,
+    run_id: str,
+    action_id: str,
+    approval_id: str,
+) -> str:
+    with session_factory() as session:
+        reseed_database(session)
+        now = datetime(2026, 6, 9, 12, 0, 0)
+        incident_id = session.scalar(select(Incident.id))
+        assert incident_id is not None
+        run = AgentRun(
+            id=run_id,
+            incident_id=incident_id,
+            status="succeeded",
+            trace_id="local-test-trace",
+            input_payload={"incident_id": incident_id},
+            final_report=None,
+            token_estimate=1,
+            cost_estimate_usd=0.0,
+            error=None,
+            started_at=now,
+            completed_at=now,
+            created_at=now,
+            updated_at=now,
+        )
+        action = MockAction(
+            id=action_id,
+            run_id=run_id,
+            action_type="draft_customer_email",
+            risk_level="high",
+            status="pending_approval",
+            title="Draft customer email",
+            description="Draft a follow-up email to affected admins.",
+            target="affected admins",
+            payload={"subject": "Heads up", "body": "We are investigating."},
+            created_by="agent",
+            created_at=now,
+            updated_at=now,
+            executed_at=None,
+        )
+        approval = ApprovalRequest(
+            id=approval_id,
+            run_id=run_id,
+            action_id=action_id,
+            status="pending",
+            risk_level="high",
+            reason="High-risk action requires explicit approval before execution.",
+            requested_by="agent",
+            decided_by=None,
+            decision_notes=None,
+            created_at=now,
+            decided_at=None,
+        )
+        session.add_all([run, action, approval])
+        session.commit()
+        return approval.id
+
+
+def _audit_event_types(
+    session_factory: Callable[[], Session], approval_id: str
+) -> list[str]:
+    with session_factory() as session:
+        events = session.scalars(
+            select(ActionAuditEvent)
+            .where(ActionAuditEvent.approval_request_id == approval_id)
+            .order_by(ActionAuditEvent.created_at, ActionAuditEvent.id)
+        ).all()
+        return [event.event_type for event in events]
+
+
+def test_concurrent_double_approval_does_not_duplicate_audit_events(
+    session_factory: Callable[[], Session],
+) -> None:
+    approval_id = _seed_pending_high_risk_approval(
+        session_factory,
+        run_id="run_race_approve",
+        action_id="act_race_approve",
+        approval_id="apr_race_approve",
+    )
+
+    # Session B loads the approval as "pending" before the winner commits.
+    # expire_on_commit=False keeps the cached object alive across the commit.
+    stale_session = session_factory()
+    stale_session.expire_on_commit = False
+    stale_session.get(ApprovalRequest, approval_id)
+    stale_session.commit()
+
+    # Winner (Session A) approves and commits; the DB row is now "approved".
+    with session_factory() as session_a:
+        approve_request(session_a, approval_id, ApprovalDecisionCreate(notes="first"))
+
+    # Force the stale session's cached object back to "pending" to simulate the
+    # stale read a concurrent approver would have made before the winner
+    # committed. SQLAlchemy's identity map does not guarantee a stale view
+    # across a post-winner transaction on SQLite, so set_committed_value
+    # deterministically reproduces the read-modify-write race the audit flagged.
+    stale_approval = stale_session.get(ApprovalRequest, approval_id)
+    set_committed_value(stale_approval, "status", "pending")
+
+    # The stale session must not double-execute. It should raise and leave the
+    # audit trail intact rather than appending a second approved/executed pair.
+    try:
+        with pytest.raises(ValueError, match="already"):
+            approve_request(
+                stale_session, approval_id, ApprovalDecisionCreate(notes="second")
+            )
+    finally:
+        stale_session.close()
+
+    event_types = _audit_event_types(session_factory, approval_id)
+    assert event_types.count("approved") == 1
+    assert event_types.count("executed") == 1
+    with session_factory() as session:
+        action = session.get(MockAction, "act_race_approve")
+        assert action.status == "executed"
+        assert action.executed_at is not None
+
+
+def test_concurrent_approve_after_reject_is_blocked(
+    session_factory: Callable[[], Session],
+) -> None:
+    approval_id = _seed_pending_high_risk_approval(
+        session_factory,
+        run_id="run_race_mixed",
+        action_id="act_race_mixed",
+        approval_id="apr_race_mixed",
+    )
+
+    stale_session = session_factory()
+    stale_session.expire_on_commit = False
+    stale_session.get(ApprovalRequest, approval_id)
+    stale_session.commit()
+
+    # Winner rejects; action must stay rejected and not flip to executed.
+    with session_factory() as session_a:
+        reject_request(session_a, approval_id, ApprovalDecisionCreate(notes="rejected first"))
+
+    # Force the stale session's cached object back to "pending" to simulate the
+    # stale read a concurrent approver would have made before the winner rejected.
+    stale_approval = stale_session.get(ApprovalRequest, approval_id)
+    set_committed_value(stale_approval, "status", "pending")
+
+    try:
+        with pytest.raises(ValueError, match="already"):
+            approve_request(
+                stale_session, approval_id, ApprovalDecisionCreate(notes="late approve")
+            )
+    finally:
+        stale_session.close()
+
+    event_types = _audit_event_types(session_factory, approval_id)
+    assert event_types.count("rejected") == 1
+    assert "approved" not in event_types
+    assert "executed" not in event_types
+    with session_factory() as session:
+        action = session.get(MockAction, "act_race_mixed")
+        assert action.status == "rejected"
+        assert action.executed_at is None

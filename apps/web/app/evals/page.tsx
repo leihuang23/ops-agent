@@ -8,6 +8,7 @@ import { formatCount, formatDateTime, formatPercent, formatScenario } from '@/li
 type EvalPageProps = {
   searchParams?: Promise<{
     eval_error?: string;
+    eval_notice?: string;
   }>;
 };
 
@@ -16,6 +17,10 @@ export default async function EvalReportPage({ searchParams }: EvalPageProps) {
   const evalError =
     typeof resolvedSearchParams?.eval_error === 'string'
       ? resolvedSearchParams.eval_error
+      : null;
+  const evalNotice =
+    typeof resolvedSearchParams?.eval_notice === 'string'
+      ? resolvedSearchParams.eval_notice
       : null;
   const result = await getEvalResults();
 
@@ -41,6 +46,12 @@ export default async function EvalReportPage({ searchParams }: EvalPageProps) {
       {evalError ? (
         <section className="panel anomaly-panel" aria-live="polite">
           <div className="panel-message error-detail">{evalError}</div>
+        </section>
+      ) : null}
+
+      {evalNotice ? (
+        <section className="panel anomaly-panel" aria-live="polite">
+          <div className="panel-message">{evalNotice}</div>
         </section>
       ) : null}
 
