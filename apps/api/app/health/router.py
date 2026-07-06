@@ -72,7 +72,11 @@ def _check_postgres() -> str:
 
 
 def _check_redis(redis_url: str) -> str:
-    redis_client = Redis.from_url(redis_url, socket_connect_timeout=2)
+    try:
+        redis_client = Redis.from_url(redis_url, socket_connect_timeout=2)
+    except Exception as exc:
+        logger.error("Redis health check failed: %s", exc)
+        return "error"
     try:
         redis_client.ping()
     except Exception as exc:

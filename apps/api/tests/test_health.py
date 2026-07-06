@@ -78,6 +78,26 @@ def test_ready_returns_503_when_redis_is_unreachable(monkeypatch) -> None:
     assert "redis unavailable" not in body["redis"]
 
 
+def test_ready_returns_503_when_redis_from_url_fails(monkeypatch) -> None:
+    """A Redis.from_url failure must also surface as a generic 503 error."""
+
+    def _failing_from_url(*_args, **_kwargs):
+        raise ValueError("invalid redis url")
+
+    import redis
+
+    monkeypatch.setattr(redis.Redis, "from_url", _failing_from_url)
+
+    response = client.get("/ready")
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["status"] == "unhealthy"
+    assert body["redis"] == "error"
+    # Must not leak the URL parsing error.
+    assert "invalid redis url" not in str(body)
+
+
 def test_ready_returns_503_when_both_dependencies_are_down(monkeypatch) -> None:
     """When both DB and Redis are down, both checks must report a generic error."""
 
