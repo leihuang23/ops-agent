@@ -27,10 +27,23 @@ def _get_redis_client() -> "redis.Redis | _LocalMemoryCache":
 
     If Redis is unreachable, falls back to ``_LocalMemoryCache`` and caches
     that decision so subsequent callers don't retry the 2s connect timeout.
+    A periodic health check (``ping``) detects dead connections and triggers
+    re-initialization so the cache recovers automatically after a Redis
+    restart or network blip.
     """
     global _redis_client
     if _redis_client is not None:
-        return _redis_client
+        # For a live Redis client, verify the connection is still usable.
+        # _LocalMemoryCache never needs a health check.
+        if not isinstance(_redis_client, _LocalMemoryCache):
+            try:
+                _redis_client.ping()
+                return _redis_client
+            except Exception:
+                # Connection is dead -- clear and re-initialize below.
+                _redis_client = None
+        else:
+            return _redis_client
     url = get_settings().redis_url
     try:
         client = redis.Redis.from_url(
@@ -44,9 +57,10 @@ def _get_redis_client() -> "redis.Redis | _LocalMemoryCache":
 
 
 def _reset_redis_client() -> None:
-    """Clear the shared client (for deterministic test isolation)."""
+    """Clear the shared client and local cache (for deterministic test isolation)."""
     global _redis_client
     _redis_client = None
+    _LOCAL_CACHE_VALUES.clear()
 
 
 class _LocalMemoryCache:

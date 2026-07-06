@@ -24,7 +24,9 @@ logger = get_logger("app.main")
 
 # Environments where the error envelope may include exception detail to help
 # local debugging. Production-like envs get a generic message only.
-_DETAIL_ENVS = frozenset({"local", "test", "development", "demo"})
+# NOTE: "demo" is intentionally excluded -- demo instances may be publicly
+# accessible and must not leak internal exception detail.
+_DETAIL_ENVS = frozenset({"local", "test", "development"})
 
 
 def create_app() -> FastAPI:
@@ -81,7 +83,13 @@ def create_app() -> FastAPI:
 
     @app.middleware("http")
     async def request_id_middleware(request: Request, call_next):
-        request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+        raw_request_id = request.headers.get("X-Request-ID", "")
+        # Sanitize: limit length and strip control characters to prevent log
+        # injection and header smuggling.
+        sanitized = "".join(
+            ch for ch in raw_request_id[:64] if ch >= " " and ch != "\x7f"
+        ).strip()
+        request_id = sanitized or str(uuid.uuid4())
         token = request_id_context.set(request_id)
         response: Response = await call_next(request)
         response.headers["X-Request-ID"] = request_id

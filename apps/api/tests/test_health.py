@@ -30,7 +30,7 @@ def test_ready_returns_200_with_dependency_status_when_healthy() -> None:
 
 
 def test_ready_returns_503_when_database_is_unreachable(monkeypatch) -> None:
-    """A DB failure must surface as 503 with the unhealthy check visible, not a bare 500."""
+    """A DB failure must surface as 503 with a generic error status, not a bare 500."""
 
     def _raising_connect(*_args, **_kwargs):
         raise OSError("connection refused")
@@ -42,13 +42,15 @@ def test_ready_returns_503_when_database_is_unreachable(monkeypatch) -> None:
     assert response.status_code == 503
     body = response.json()
     assert body["status"] == "unhealthy"
-    assert "connection refused" in body["postgres"]
+    # The endpoint must not leak raw exception detail (credentials, hostnames).
+    assert body["postgres"] == "error"
+    assert "connection refused" not in body["postgres"]
     # Redis is independent — it should still be checked and reported as ok.
     assert body["redis"] == "ok"
 
 
 def test_ready_returns_503_when_redis_is_unreachable(monkeypatch) -> None:
-    """A Redis failure must surface as 503 with the unhealthy check visible, not a bare 500."""
+    """A Redis failure must surface as 503 with a generic error status, not a bare 500."""
 
     class UnreachableRedis:
         @classmethod
@@ -57,6 +59,9 @@ def test_ready_returns_503_when_redis_is_unreachable(monkeypatch) -> None:
 
         def ping(self) -> None:
             raise OSError("redis unavailable")
+
+        def close(self) -> None:
+            pass
 
     import redis
 
@@ -68,11 +73,13 @@ def test_ready_returns_503_when_redis_is_unreachable(monkeypatch) -> None:
     body = response.json()
     assert body["status"] == "unhealthy"
     assert body["postgres"] == "ok"
-    assert "redis unavailable" in body["redis"]
+    # The endpoint must not leak raw exception detail.
+    assert body["redis"] == "error"
+    assert "redis unavailable" not in body["redis"]
 
 
 def test_ready_returns_503_when_both_dependencies_are_down(monkeypatch) -> None:
-    """When both DB and Redis are down, both checks must report their failure."""
+    """When both DB and Redis are down, both checks must report a generic error."""
 
     def _raising_connect(*_args, **_kwargs):
         raise OSError("db connection refused")
@@ -85,6 +92,9 @@ def test_ready_returns_503_when_both_dependencies_are_down(monkeypatch) -> None:
         def ping(self) -> None:
             raise OSError("redis unavailable")
 
+        def close(self) -> None:
+            pass
+
     import redis
 
     monkeypatch.setattr("app.health.router.engine.connect", _raising_connect)
@@ -95,6 +105,6 @@ def test_ready_returns_503_when_both_dependencies_are_down(monkeypatch) -> None:
     assert response.status_code == 503
     body = response.json()
     assert body["status"] == "unhealthy"
-    assert "db connection refused" in body["postgres"]
-    assert "redis unavailable" in body["redis"]
+    assert body["postgres"] == "error"
+    assert body["redis"] == "error"
 

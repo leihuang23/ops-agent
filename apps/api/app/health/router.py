@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Response
 from pydantic import BaseModel
 from redis import Redis
@@ -5,6 +7,8 @@ from sqlalchemy import text
 
 from app.core.config import get_settings
 from app.db.session import engine
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["health"])
 
@@ -62,15 +66,19 @@ def _check_postgres() -> str:
         with engine.connect() as connection:
             connection.execute(text("select 1"))
     except Exception as exc:
-        return f"error: {exc}"
+        logger.error("Postgres health check failed: %s", exc)
+        return "error"
     return "ok"
 
 
 def _check_redis(redis_url: str) -> str:
+    redis_client = Redis.from_url(redis_url, socket_connect_timeout=2)
     try:
-        redis_client = Redis.from_url(redis_url)
         redis_client.ping()
     except Exception as exc:
-        return f"error: {exc}"
+        logger.error("Redis health check failed: %s", exc)
+        return "error"
+    finally:
+        redis_client.close()
     return "ok"
 

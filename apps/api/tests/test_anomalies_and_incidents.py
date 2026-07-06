@@ -398,3 +398,20 @@ def test_incidents_endpoint_respects_limit_and_offset(
     assert last_page.status_code == 200
     assert last_page.json()["total"] == 6
     assert len(last_page.json()["incidents"]) == 1
+
+
+def test_incidents_endpoint_rejects_invalid_pagination_params(
+    session_factory: Callable[[], Session],
+) -> None:
+    """GET /incidents with out-of-range limit must return 422."""
+    client = _seeded_incidents_client(session_factory)
+    try:
+        zero_limit = client.get("/incidents?limit=0")
+        over_limit = client.get("/incidents?limit=201")
+        negative_offset = client.get("/incidents?offset=-1")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert zero_limit.status_code == 422
+    assert over_limit.status_code == 422
+    assert negative_offset.status_code == 422

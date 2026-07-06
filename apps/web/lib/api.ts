@@ -495,7 +495,7 @@ export type AgentRunListResult =
   | { ok: true; data: AgentRunSummary[] }
   | { ok: false; error: string };
 
-export type EvalStatus = 'passed' | 'failed';
+export type EvalStatus = 'passed' | 'failed' | 'running';
 
 export type EvalResult = {
   id: string;
@@ -530,7 +530,7 @@ export type EvalRunSummary = {
   passed_scenarios: number;
   failed_scenarios: number;
   started_at: string;
-  completed_at: string;
+  completed_at: string | null;
   results: EvalResult[];
 };
 

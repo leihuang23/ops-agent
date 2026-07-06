@@ -91,10 +91,11 @@ def run_eval_suite(
                 started_at=case_start,
                 completed_at=case_completed,
             )
+        # Persist each result incrementally so that a Celery timeout or
+        # process crash does not lose already-completed cases.
+        session.add(result)
+        session.commit()
         pending_results.append(result)
-
-    session.add_all(pending_results)
-    session.commit()
     results: list[EvalResultRead] = []
     for result in pending_results:
         session.refresh(result)

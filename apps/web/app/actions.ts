@@ -94,6 +94,17 @@ export async function runEvalSuiteFromReport() {
     redirect(`/evals?eval_error=${encodeURIComponent(result.error)}`);
   }
 
+  // When the backend returns 202 the suite is running asynchronously via
+  // Celery. Redirect with a status hint so the evals page can show the
+  // user that results will appear shortly.
+  if (result.data.status === 'running') {
+    redirect(
+      `/evals?eval_notice=${encodeURIComponent(
+        'Eval suite enqueued — results will be available shortly.',
+      )}`,
+    );
+  }
+
   redirect('/evals');
 }
 

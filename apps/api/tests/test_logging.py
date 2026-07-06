@@ -25,6 +25,31 @@ def test_health_response_preserves_inbound_request_id() -> None:
     assert response.headers.get("X-Request-ID") == "inbound-request-123"
 
 
+def test_request_id_strips_control_characters() -> None:
+    """X-Request-ID with newlines or control chars must be sanitized to prevent log injection."""
+    client = TestClient(app)
+    response = client.get(
+        "/health",
+        headers={"X-Request-ID": "injected\nFAKE LOG LINE\r\n"},
+    )
+    assert response.status_code == 200
+    request_id = response.headers.get("X-Request-ID")
+    assert request_id
+    assert "\n" not in request_id
+    assert "\r" not in request_id
+
+
+def test_request_id_truncates_long_values() -> None:
+    """X-Request-ID longer than 64 chars must be truncated."""
+    client = TestClient(app)
+    long_id = "a" * 200
+    response = client.get("/health", headers={"X-Request-ID": long_id})
+    assert response.status_code == 200
+    request_id = response.headers.get("X-Request-ID")
+    assert request_id
+    assert len(request_id) <= 64
+
+
 def test_json_formatter_includes_extra_fields() -> None:
     configure_logging()
     formatter = JsonFormatter()
