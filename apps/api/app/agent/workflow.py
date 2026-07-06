@@ -735,6 +735,15 @@ def _evidence_text(
     doc_results: dict[str, Any],
     support_tickets: dict[str, Any],
 ) -> str:
+    """Build a lowercased text blob of actual evidence for deterministic diagnosis.
+
+    Doc results are intentionally excluded. Runbook snippets describe what to
+    look for (e.g., "check whether the failure reason says retry webhook"), so
+    including them would create self-fulfilling diagnoses: any query about
+    failed renewals returns docs that mention various failure modes, and the
+    diagnosis would match whatever the docs mention rather than the actual
+    invoice failure reasons and support ticket content.
+    """
     parts: list[str] = []
     for account in account_details["accounts"]:
         parts.extend(
@@ -750,19 +759,6 @@ def _evidence_text(
             str(invoice.get("failure_reason"))
             for invoice in account.get("failed_invoices", [])
             if invoice.get("failure_reason")
-        )
-    for result in doc_results["results"]:
-        citation = result.get("citation", {})
-        parts.extend(
-            str(value)
-            for value in [
-                result.get("source_id"),
-                result.get("title"),
-                result.get("snippet"),
-                citation.get("source_id"),
-                citation.get("title"),
-            ]
-            if value
         )
     for ticket in support_tickets["tickets"]:
         parts.extend(

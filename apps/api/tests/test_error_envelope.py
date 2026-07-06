@@ -57,62 +57,6 @@ def test_unhandled_exception_withholds_detail_in_production(monkeypatch) -> None
         get_settings.cache_clear()
 
 
-def test_evals_run_maps_integrity_error_to_409(monkeypatch) -> None:
-    """When run_eval_suite raises IntegrityError, the route should map it to
-    HTTP 409 with the structured envelope, not a 500 (audit §3 #5)."""
-    from sqlalchemy.exc import IntegrityError
-
-    from app.core.config import get_settings
-    from app.evals import router as evals_router
-
-    def raise_integrity(db) -> None:
-        raise IntegrityError("stmt", {}, Exception("dup"))
-
-    monkeypatch.setattr(evals_router, "run_eval_suite", raise_integrity)
-    monkeypatch.setenv("EVAL_RUN_TOKEN", "eval-token")
-    get_settings.cache_clear()
-    app.dependency_overrides[get_db] = _override_db
-    try:
-        client = TestClient(app, raise_server_exceptions=False)
-        response = client.post(
-            "/evals/run", headers={"X-Eval-Run-Token": "eval-token"}
-        )
-        assert response.status_code == 409
-        body = response.json()
-        assert body["error"]["code"] == "conflict"
-        assert body["error"]["request_id"]
-    finally:
-        app.dependency_overrides.pop(get_db, None)
-        get_settings.cache_clear()
-
-
-def test_evals_run_maps_lookup_error_to_404(monkeypatch) -> None:
-    """When run_eval_suite raises LookupError (e.g. missing eval case), the
-    route should map it to HTTP 404 with the structured envelope."""
-    from app.core.config import get_settings
-    from app.evals import router as evals_router
-
-    def raise_lookup(db) -> None:
-        raise LookupError("eval case not found")
-
-    monkeypatch.setattr(evals_router, "run_eval_suite", raise_lookup)
-    monkeypatch.setenv("EVAL_RUN_TOKEN", "eval-token")
-    get_settings.cache_clear()
-    app.dependency_overrides[get_db] = _override_db
-    try:
-        client = TestClient(app, raise_server_exceptions=False)
-        response = client.post(
-            "/evals/run", headers={"X-Eval-Run-Token": "eval-token"}
-        )
-        assert response.status_code == 404
-        body = response.json()
-        assert body["error"]["code"] == "not_found"
-        assert body["error"]["request_id"]
-    finally:
-        app.dependency_overrides.pop(get_db, None)
-        get_settings.cache_clear()
-
-
 def test_documents_ingest_maps_integrity_error_to_409(monkeypatch) -> None:
     """When document ingestion raises IntegrityError, the route should map it
     to HTTP 409 with the structured envelope (audit §3 #5)."""

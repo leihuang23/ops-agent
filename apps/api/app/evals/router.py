@@ -1,18 +1,19 @@
 from __future__ import annotations
 
 import secrets
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.agent.persistence import utcnow_naive
 from app.core.access import require_demo_data_access
 from app.core.config import get_settings
-from app.core.errors import error_response
 from app.core.limiter import limiter
 from app.db.session import get_db
-from app.evals.runner import list_latest_eval_results, run_eval_suite
+from app.evals.runner import build_eval_run_summary, list_latest_eval_results
 from app.evals.schemas import EvalResultsReport, EvalRunSummary
+from app.evals.tasks import run_eval_suite_task
 
 _settings = get_settings()
 
@@ -44,20 +45,54 @@ def require_eval_run_access(
         )
 
 
+def _enqueue_eval_suite(eval_run_id: str) -> None:
+    """Enqueue the eval suite as a Celery task.
+
+    In the ``test`` env (``task_always_eager=True``) ``.run()`` executes the
+    task body synchronously so tests can assert on persisted rows without a
+    live broker. In all other envs ``.delay()`` hands the work to a worker
+    and returns immediately, keeping the HTTP request off the suite path.
+    """
+    settings = get_settings()
+    if settings.app_env == "test":
+        run_eval_suite_task.run(eval_run_id)
+    else:
+        run_eval_suite_task.delay(eval_run_id)
+
+
 @router.post("/run", dependencies=[Depends(require_eval_run_access)])
 @limiter.limit(f"{_settings.rate_limit_mutations_per_minute}/minute")
 def run_evals(
     request: Request,
     response: Response,
+) -> EvalRunSummary:
+    eval_run_id = f"evalrun_{uuid4().hex[:16]}"
+    started_at = utcnow_naive()
+    _enqueue_eval_suite(eval_run_id)
+    response.status_code = status.HTTP_202_ACCEPTED
+    return EvalRunSummary(
+        eval_run_id=eval_run_id,
+        status="running",
+        total_scenarios=0,
+        passed_scenarios=0,
+        failed_scenarios=0,
+        started_at=started_at,
+        completed_at=None,
+        results=[],
+    )
+
+
+@router.get("/runs/{eval_run_id}")
+def eval_run_status(
+    eval_run_id: str,
     db: Session = Depends(get_db),
 ) -> EvalRunSummary:
-    try:
-        summary = run_eval_suite(db)
-    except LookupError as exc:
-        return error_response("not_found", str(exc), 404)
-    except IntegrityError as exc:
-        return error_response("conflict", str(exc), 409)
-    response.status_code = status.HTTP_201_CREATED
+    summary = build_eval_run_summary(db, eval_run_id)
+    if summary is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Eval run {eval_run_id} not found.",
+        )
     return summary
 
 

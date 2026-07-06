@@ -199,7 +199,7 @@ def test_incidents_endpoint_lists_seeded_incidents(
 
     assert response.status_code == 200
     payload = response.json()
-    assert len(payload) == 5
+    assert len(payload) == 6
     assert payload[0].keys() == {
         "id",
         "title",

@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 from time import perf_counter
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from fastapi.encoders import jsonable_encoder
@@ -44,10 +44,13 @@ MARKER_STOPWORDS = {
 MONTH_TOKEN_ALIASES = {"june": "06"}
 
 
-def run_eval_suite(session: Session) -> EvalRunSummary:
+def run_eval_suite(
+    session: Session, *, eval_run_id: str | None = None
+) -> EvalRunSummary:
     cases = session.scalars(select(EvalCase).order_by(EvalCase.id)).all()
     started_at = utcnow_naive()
-    eval_run_id = f"evalrun_{uuid4().hex[:16]}"
+    if eval_run_id is None:
+        eval_run_id = f"evalrun_{uuid4().hex[:16]}"
     pending_results: list[EvalResult] = []
 
     for case in cases:
@@ -157,6 +160,56 @@ def list_latest_eval_results(session: Session) -> EvalResultsReport:
         total_scenarios=len(result_reads),
         passed_scenarios=passed_scenarios,
         failed_scenarios=failed_scenarios,
+        results=result_reads,
+    )
+
+
+def build_eval_run_summary(
+    session: Session, eval_run_id: str
+) -> EvalRunSummary | None:
+    """Reconstruct an ``EvalRunSummary`` from persisted ``EvalResult`` rows.
+
+    Returns ``None`` when no results exist for ``eval_run_id`` (the run was
+    never enqueued, or the ID is unknown). Returns a ``running`` summary when
+    only a partial set of results has been persisted (the Celery task is still
+    in flight). Returns ``passed``/``failed`` once all expected cases have a
+    persisted result.
+    """
+    expected_case_count = int(
+        session.scalar(select(func.count(EvalCase.id)).select_from(EvalCase)) or 0
+    )
+    results = session.scalars(
+        select(EvalResult)
+        .where(EvalResult.eval_run_id == eval_run_id)
+        .order_by(EvalResult.scenario)
+    ).all()
+    if not results:
+        return None
+
+    result_reads = [eval_result_to_read(result) for result in results]
+    passed_scenarios = sum(result.passed for result in result_reads)
+    failed_scenarios = len(result_reads) - passed_scenarios
+    started_at = min(result.started_at for result in results)
+    is_complete = (
+        expected_case_count > 0 and len(result_reads) >= expected_case_count
+    )
+    completed_at = (
+        max(result.completed_at for result in results) if is_complete else None
+    )
+    if not is_complete:
+        status: Literal["passed", "failed", "running"] = "running"
+    elif passed_scenarios >= PASSING_SCENARIO_THRESHOLD:
+        status = "passed"
+    else:
+        status = "failed"
+    return EvalRunSummary(
+        eval_run_id=eval_run_id,
+        status=status,
+        total_scenarios=len(result_reads),
+        passed_scenarios=passed_scenarios,
+        failed_scenarios=failed_scenarios,
+        started_at=started_at,
+        completed_at=completed_at,
         results=result_reads,
     )
 

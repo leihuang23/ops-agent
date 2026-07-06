@@ -166,8 +166,8 @@ def test_seed_command_data_is_deterministic(
             "invoices": 600,
             "product_events": 6000,
             "support_tickets": 240,
-            "incidents": 5,
-            "eval_cases": 5,
+            "incidents": 6,
+            "eval_cases": 6,
             "eval_results": 0,
         }
         for table_name, expected_count in expected_domain_counts.items():
@@ -342,11 +342,15 @@ def test_seeded_scenarios_include_evidence_for_future_investigations(
             scenario: len(account_numbers)
             for scenario, account_numbers in SCENARIO_ACCOUNT_NUMBERS.items()
         }
-        for scenario in SCENARIOS.values():
+        for scenario_name, scenario in SCENARIOS.items():
             assert scenario["root_cause"]
             assert scenario["expected_evidence"]
             assert scenario["false_leads"]
-            assert scenario["recommended_actions"]
+            # The ambiguity scenario intentionally has no recommended actions:
+            # recommending specific actions for an unknown root cause would
+            # contradict the agent's uncertainty diagnosis.
+            if scenario_name != "unknown_root_cause":
+                assert scenario["recommended_actions"]
 
         assert failed_invoice_scenarios >= {
             "checkout_retry_regression",
