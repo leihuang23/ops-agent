@@ -529,6 +529,10 @@ export type ApprovalDecisionResult =
   | { ok: true; data: ApprovalRequest }
   | { ok: false; error: string };
 
+type DemoOperatorOptions = {
+  demoOperatorToken?: string;
+};
+
 async function readErrorMessage(response: Response, fallback: string): Promise<string> {
   try {
     const body = (await response.json()) as { detail?: unknown };
@@ -538,6 +542,15 @@ async function readErrorMessage(response: Response, fallback: string): Promise<s
   } catch {}
 
   return fallback;
+}
+
+function demoOperatorHeaders(token: string | undefined): Record<string, string> {
+  if (!token) {
+    return {};
+  }
+  return {
+    'X-Demo-Operator-Token': token,
+  };
 }
 
 export async function getHealth(): Promise<HealthResponse> {
@@ -612,12 +625,14 @@ export async function getRevenueAnomalies(): Promise<RevenueAnomaliesResult> {
 
 export async function createIncidentFromAnomaly(
   anomalyId: string,
+  options: DemoOperatorOptions = {},
 ): Promise<CreateIncidentFromAnomalyResult> {
   try {
     const response = await fetch(`${resolveApiBaseUrl()}/incidents`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...demoOperatorHeaders(options.demoOperatorToken),
       },
       body: JSON.stringify({ anomaly_id: anomalyId }),
       cache: 'no-store',
@@ -722,13 +737,14 @@ export async function getAccount(accountId: string): Promise<AccountDetailResult
 
 export async function startInvestigation(
   incidentId: string,
-  options: { runInline?: boolean } = {},
+  options: { runInline?: boolean } & DemoOperatorOptions = {},
 ): Promise<StartInvestigationResult> {
   try {
     const response = await fetch(`${resolveApiBaseUrl()}/agent/investigations`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...demoOperatorHeaders(options.demoOperatorToken),
       },
       body: JSON.stringify({
         incident_id: incidentId,
@@ -983,27 +999,31 @@ export async function getSupportTicket(ticketId: string): Promise<SupportTicketD
 export async function approveApprovalRequest(
   approvalId: string,
   notes?: string,
+  options: DemoOperatorOptions = {},
 ): Promise<ApprovalDecisionResult> {
-  return submitApprovalDecision(approvalId, 'approve', notes);
+  return submitApprovalDecision(approvalId, 'approve', notes, options);
 }
 
 export async function rejectApprovalRequest(
   approvalId: string,
   notes?: string,
+  options: DemoOperatorOptions = {},
 ): Promise<ApprovalDecisionResult> {
-  return submitApprovalDecision(approvalId, 'reject', notes);
+  return submitApprovalDecision(approvalId, 'reject', notes, options);
 }
 
 async function submitApprovalDecision(
   approvalId: string,
   decision: 'approve' | 'reject',
   notes?: string,
+  options: DemoOperatorOptions = {},
 ): Promise<ApprovalDecisionResult> {
   try {
     const response = await fetch(`${resolveApiBaseUrl()}/approvals/${approvalId}/${decision}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...demoOperatorHeaders(options.demoOperatorToken),
       },
       body: JSON.stringify({ notes }),
       cache: 'no-store',

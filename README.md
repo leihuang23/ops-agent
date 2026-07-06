@@ -358,7 +358,7 @@ Inspect the project as a vertical product slice first. Promote it to full MVP in
 6. Review safety boundaries.
    - Demo data endpoints are restricted to local/test/development/demo environments.
    - The document ingestion HTTP endpoint is disabled unless `DOCUMENT_INGEST_TOKEN` is configured.
-   - The project still needs approval requests and mock action workflows before it can demonstrate approval-gated actions.
+   - Risky mock actions create approval requests and stay blocked until an operator approves or rejects them.
 
 Important inspection questions:
 

@@ -16,7 +16,7 @@ export async function openIncidentFromAnomaly(formData: FormData) {
     throw new Error('Missing anomaly id');
   }
 
-  const incident = await createIncidentFromAnomaly(anomalyId);
+  const incident = await createIncidentFromAnomaly(anomalyId, demoOperatorOptions());
   if (!incident.ok) {
     redirect(`/?incident_error=${encodeURIComponent(incident.error)}`);
   }
@@ -31,7 +31,10 @@ export async function startInvestigationFromIncident(formData: FormData) {
   }
 
   const encodedIncidentId = encodeURIComponent(incidentId);
-  const run = await startInvestigation(incidentId, { runInline: true });
+  const run = await startInvestigation(incidentId, {
+    runInline: true,
+    ...demoOperatorOptions(),
+  });
   if (!run.ok) {
     redirect(`/incidents/${encodedIncidentId}?investigation_error=${encodeURIComponent(run.error)}`);
   }
@@ -45,6 +48,7 @@ export async function approveApprovalFromRun(formData: FormData) {
   const result = await approveApprovalRequest(
     approvalId,
     'Approved from the investigation approval queue.',
+    demoOperatorOptions(),
   );
 
   redirectToRun(runId, result.ok ? undefined : result.error);
@@ -56,6 +60,7 @@ export async function rejectApprovalFromRun(formData: FormData) {
   const result = await rejectApprovalRequest(
     approvalId,
     'Rejected from the investigation approval queue.',
+    demoOperatorOptions(),
   );
 
   redirectToRun(runId, result.ok ? undefined : result.error);
@@ -66,6 +71,7 @@ export async function approveApprovalFromQueue(formData: FormData) {
   const result = await approveApprovalRequest(
     approvalId,
     'Approved from the global approvals queue.',
+    demoOperatorOptions(),
   );
 
   redirectToApprovals(result.ok ? undefined : result.error);
@@ -76,6 +82,7 @@ export async function rejectApprovalFromQueue(formData: FormData) {
   const result = await rejectApprovalRequest(
     approvalId,
     'Rejected from the global approvals queue.',
+    demoOperatorOptions(),
   );
 
   redirectToApprovals(result.ok ? undefined : result.error);
@@ -96,6 +103,12 @@ function readRequiredFormValue(formData: FormData, key: string) {
     throw new Error(`Missing ${key}`);
   }
   return value;
+}
+
+function demoOperatorOptions() {
+  return {
+    demoOperatorToken: process.env.DEMO_OPERATOR_TOKEN,
+  };
 }
 
 function redirectToRun(runId: string, error?: string) {

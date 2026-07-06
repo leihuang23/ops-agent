@@ -49,11 +49,14 @@ test('agent run page exposes report, trace, cost, citations, approvals, and step
   assert.match(source, /Tool-step history/);
 });
 
-test('web API helper does not proxy demo operator credentials', () => {
-  const source = readWorkspaceFile('lib/api.ts');
+test('server actions forward demo operator credentials without public env exposure', () => {
+  const apiSource = readWorkspaceFile('lib/api.ts');
+  const actionSource = readWorkspaceFile('app/actions.ts');
 
-  assert.doesNotMatch(source, /DEMO_OPERATOR_TOKEN/);
-  assert.doesNotMatch(source, /X-Demo-Operator-Token/);
+  assert.match(apiSource, /X-Demo-Operator-Token/);
+  assert.doesNotMatch(apiSource, /process\.env\.DEMO_OPERATOR_TOKEN/);
+  assert.match(actionSource, /process\.env\.DEMO_OPERATOR_TOKEN/);
+  assert.doesNotMatch(actionSource, /NEXT_PUBLIC_DEMO_OPERATOR_TOKEN/);
 });
 
 test('eval report page exposes scenario scores, failures, and traces', () => {

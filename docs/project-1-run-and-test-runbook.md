@@ -69,7 +69,7 @@ With no Langfuse or LangSmith credentials, agent runs produce local trace identi
 local://agent-runs/<run_id>/traces/<trace_id>
 ```
 
-`docker-compose.yml` defaults the API to `APP_ENV=demo`, which protects demo mutation endpoints with `DEMO_OPERATOR_TOKEN`. For public demo mutation checks, set the token on the API and call the backend directly with `X-Demo-Operator-Token`; the web server intentionally does not proxy this credential without an authenticated reviewer session. For a trusted local-only review path, set `APP_ENV=local` before starting Compose.
+`docker-compose.yml` defaults the API to `APP_ENV=demo`, which protects demo mutation endpoints with `DEMO_OPERATOR_TOKEN`. For public demo mutation checks, set the same `DEMO_OPERATOR_TOKEN` for both API and web services. The web server reads it only in server actions and forwards it as `X-Demo-Operator-Token`; do not expose it through a `NEXT_PUBLIC_` variable. For a trusted local-only review path, set `APP_ENV=local` before starting Compose.
 
 ## Start The Full Stack
 
