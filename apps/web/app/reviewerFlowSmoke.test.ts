@@ -14,6 +14,7 @@ test('dashboard page exposes anomaly and navigation review surfaces', () => {
   const nav = readWorkspaceFile('app/Nav.tsx');
 
   assert.match(source, /Detected revenue anomalies/);
+  assert.match(source, /Seeded scenario coverage/);
   assert.match(source, /Recent failed invoices/);
   assert.match(source, /Ticket volume by category/);
   assert.match(nav, /href[:=]\s*['"]\/incidents['"]/);

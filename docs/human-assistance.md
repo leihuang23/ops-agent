@@ -2,6 +2,114 @@
 
 These items need credentials, external services, or an operator-owned deployment target. They are not required for the local PRD MVP behavior, but they are useful before a public portfolio review.
 
+## Credential Setup Manual
+
+Do not commit real `.env` files. For Docker Compose, copy the root `.env.example`
+to `.env` and set credentials there. For separate local API/web processes, copy
+`apps/api/.env.example` to `apps/api/.env` and `apps/web/.env.example` to
+`apps/web/.env.local`.
+
+### Demo Operator Writes
+
+Use this when `APP_ENV=demo` and the reviewer should click protected UI actions
+such as creating incidents, starting investigations, or approving/rejecting mock
+actions.
+
+```bash
+DEMO_OPERATOR_TOKEN=<generate-a-long-random-token>
+```
+
+Set the same value for the API and web server. In Docker Compose, the root `.env`
+now feeds both services. The web app reads this only in server actions and sends
+it to the API as `X-Demo-Operator-Token`; never expose it through a
+`NEXT_PUBLIC_` variable.
+
+### LLM Diagnosis Provider
+
+The local MVP runs with deterministic diagnosis by default:
+
+```bash
+LLM_PROVIDER=none
+```
+
+To test provider-backed synthesis with OpenAI:
+
+```bash
+LLM_PROVIDER=openai
+LLM_MODEL=gpt-4o-mini
+OPENAI_API_KEY=<your-openai-api-key>
+```
+
+To test provider-backed synthesis with Anthropic:
+
+```bash
+LLM_PROVIDER=anthropic
+LLM_MODEL=claude-3-5-haiku-latest
+ANTHROPIC_API_KEY=<your-anthropic-api-key>
+```
+
+Provider output is still evidence-gated by the workflow. If a specific LLM root
+cause does not match retrieved deterministic evidence, the run falls back and
+records `unsupported_llm_diagnosis: deterministic_fallback` in trace metadata.
+
+### OpenAI Embeddings
+
+The default local hashing provider needs no key:
+
+```bash
+EMBEDDING_PROVIDER=local
+EMBEDDING_MODEL=local-hashing-v1
+```
+
+To use OpenAI embeddings for document ingestion/search:
+
+```bash
+EMBEDDING_PROVIDER=openai
+OPENAI_API_KEY=<your-openai-api-key>
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+```
+
+If `EMBEDDING_PROVIDER=openai` is set without `OPENAI_API_KEY`, the API falls
+back to local embeddings so the demo remains runnable.
+
+### Hosted Observability
+
+For Langfuse:
+
+```bash
+OBSERVABILITY_PROVIDER=langfuse
+LANGFUSE_PUBLIC_KEY=<public-key>
+LANGFUSE_SECRET_KEY=<secret-key>
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
+LANGFUSE_PROJECT_ID=<project-id>
+```
+
+For LangSmith:
+
+```bash
+OBSERVABILITY_PROVIDER=langsmith
+LANGSMITH_TRACING=true
+LANGSMITH_API_KEY=<api-key>
+LANGSMITH_ENDPOINT=https://api.smith.langchain.com
+LANGSMITH_PROJECT=ops-agent-local
+LANGSMITH_WEB_URL=https://smith.langchain.com
+```
+
+Keep `OBSERVABILITY_FULL_PAYLOADS=false` unless you intentionally want hosted
+traces to include synthetic evidence payloads.
+
+### Operator-Triggered HTTP Utilities
+
+These are optional tokens for mutating utility endpoints:
+
+```bash
+DOCUMENT_INGEST_TOKEN=<random-token-for-post-documents-ingest>
+EVAL_RUN_TOKEN=<random-token-for-post-evals-run>
+```
+
+`EVAL_RUN_TOKEN` must be available to both API and web if the reviewer should run
+the eval suite from `/evals`. `DOCUMENT_INGEST_TOKEN` is API-only.
+
 ## Hosted Observability
 
 - Configure either Langfuse or LangSmith credentials in the API runtime.

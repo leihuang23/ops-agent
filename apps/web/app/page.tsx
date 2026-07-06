@@ -1,8 +1,19 @@
 import Link from 'next/link';
 
 import { openIncidentFromAnomaly } from '@/app/actions';
-import type { DashboardMetrics, RevenueAnomaliesResult, RevenueAnomaly } from '@/lib/api';
-import { getDashboardMetrics, getHealth, getRevenueAnomalies } from '@/lib/api';
+import type {
+  DashboardMetrics,
+  IncidentListResult,
+  IncidentSummary,
+  RevenueAnomaliesResult,
+  RevenueAnomaly,
+} from '@/lib/api';
+import {
+  getDashboardMetrics,
+  getHealth,
+  getRevenueAnomalies,
+  listIncidents,
+} from '@/lib/api';
 import {
   formatCount,
   formatDate,
@@ -20,10 +31,11 @@ type HomeProps = {
 
 export default async function Home({ searchParams }: HomeProps) {
   const resolvedSearchParams = await searchParams;
-  const [health, dashboardResult, anomaliesResult] = await Promise.all([
+  const [health, dashboardResult, anomaliesResult, incidentsResult] = await Promise.all([
     getHealth(),
     getDashboardMetrics(),
     getRevenueAnomalies(),
+    listIncidents(),
   ]);
   const apiOnline = health.status === 'ok';
   const incidentError =
@@ -59,7 +71,11 @@ export default async function Home({ searchParams }: HomeProps) {
       ) : null}
 
       {dashboardResult.ok ? (
-        <Dashboard data={dashboardResult.data} anomaliesResult={anomaliesResult} />
+        <Dashboard
+          data={dashboardResult.data}
+          anomaliesResult={anomaliesResult}
+          incidentsResult={incidentsResult}
+        />
       ) : (
         <UnavailablePanel error={dashboardResult.error} />
       )}
@@ -70,9 +86,11 @@ export default async function Home({ searchParams }: HomeProps) {
 function Dashboard({
   data,
   anomaliesResult,
+  incidentsResult,
 }: {
   data: DashboardMetrics;
   anomaliesResult: RevenueAnomaliesResult;
+  incidentsResult: IncidentListResult;
 }) {
   const categoryMax = Math.max(
     ...data.ticket_volume.by_category_30d.map((category) => category.count),
@@ -100,7 +118,10 @@ function Dashboard({
         </div>
       </section>
 
-      <AnomalyPanel result={anomaliesResult} />
+      <section className="review-grid" aria-label="Investigation review surfaces">
+        <AnomalyPanel result={anomaliesResult} />
+        <ScenarioCoveragePanel result={incidentsResult} />
+      </section>
 
       <section className="metric-grid" aria-label="Business metrics">
         <MetricCard
@@ -222,6 +243,52 @@ function Dashboard({
         </div>
       </section>
     </>
+  );
+}
+
+function ScenarioCoveragePanel({ result }: { result: IncidentListResult }) {
+  return (
+    <section className="panel scenario-panel">
+      <div className="panel-header">
+        <h2>Seeded scenario coverage</h2>
+        <span>{result.ok ? `${formatCount(result.data.length)} incidents` : 'Unavailable'}</span>
+      </div>
+      {!result.ok ? (
+        <div className="panel-message error-detail">{result.error}</div>
+      ) : result.data.length === 0 ? (
+        <div className="panel-message">No seeded incidents are available for review.</div>
+      ) : (
+        <div className="scenario-list">
+          {result.data.map((incident) => (
+            <ScenarioRow incident={incident} key={incident.id} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ScenarioRow({ incident }: { incident: IncidentSummary }) {
+  return (
+    <Link className="scenario-row" href={`/incidents/${incident.id}`}>
+      <div>
+        <span className={`severity-pill severity-${incident.severity}`}>
+          {incident.severity}
+        </span>
+        <strong>{incident.title}</strong>
+        <small>{incident.summary}</small>
+      </div>
+      <dl>
+        <div>
+          <dt>Accounts</dt>
+          <dd>{formatCount(incident.affected_account_count)}</dd>
+        </div>
+        <div>
+          <dt>Detected</dt>
+          <dd>{formatDateTime(incident.detected_at)}</dd>
+        </div>
+      </dl>
+    </Link>
   );
 }
 

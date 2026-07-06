@@ -10,6 +10,10 @@ def test_docker_compose_wires_app_env_for_local_mode_by_default() -> None:
 
     assert "APP_ENV: ${APP_ENV:-local}" in compose
     assert "DEMO_OPERATOR_TOKEN: ${DEMO_OPERATOR_TOKEN:-}" in compose
+    assert "LLM_PROVIDER: ${LLM_PROVIDER:-none}" in compose
+    assert "OPENAI_API_KEY: ${OPENAI_API_KEY:-}" in compose
+    assert "ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}" in compose
+    assert "OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}" in compose
 
 
 def test_active_run_guard_migration_normalizes_dirty_active_rows() -> None:

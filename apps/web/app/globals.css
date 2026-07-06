@@ -325,8 +325,88 @@ select {
   margin-bottom: 16px;
 }
 
+.review-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(360px, 0.8fr);
+  gap: 16px;
+  align-items: start;
+  margin-bottom: 16px;
+}
+
+.review-grid .anomaly-panel {
+  margin-bottom: 0;
+}
+
 .anomaly-list {
   display: grid;
+}
+
+.scenario-list {
+  display: grid;
+}
+
+.scenario-row {
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  text-decoration: none;
+}
+
+.scenario-row:last-child {
+  border-bottom: 0;
+}
+
+.scenario-row:hover {
+  background: #f8fafc;
+}
+
+.scenario-row strong {
+  display: block;
+  margin-top: 8px;
+  color: var(--foreground);
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.scenario-row small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.scenario-row dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--border);
+}
+
+.scenario-row dl div {
+  min-width: 0;
+  padding: 10px;
+  background: var(--panel);
+}
+
+.scenario-row dt {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.scenario-row dd {
+  margin: 5px 0 0;
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 800;
 }
 
 .anomaly-row {
@@ -1134,6 +1214,10 @@ tbody tr:last-child td {
     grid-template-columns: 1fr;
   }
 
+  .review-grid {
+    grid-template-columns: 1fr;
+  }
+
   .report-grid {
     grid-template-columns: 1fr;
   }
@@ -1189,6 +1273,7 @@ tbody tr:last-child td {
   .snapshot-bar,
   .metric-grid,
   .stat-list,
+  .scenario-row dl,
   .anomaly-facts,
   .evidence-list,
   .action-meta,
