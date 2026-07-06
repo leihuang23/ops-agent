@@ -98,6 +98,28 @@ LANGSMITH_WEB_URL=https://smith.langchain.com
 Keep `OBSERVABILITY_FULL_PAYLOADS=false` unless you intentionally want hosted
 traces to include synthetic evidence payloads.
 
+### Rate Limiting
+
+Rate limits require a reachable Redis broker and are enforced by `slowapi` on
+mutating and search endpoints:
+
+```bash
+RATE_LIMIT_MUTATIONS_PER_MINUTE=10
+RATE_LIMIT_SEARCH_PER_MINUTE=60
+```
+
+Raise these for a trusted reviewer environment; lower them for a public demo.
+
+### Logging
+
+```bash
+LOG_LEVEL=INFO
+LOG_FORMAT=text
+```
+
+Set `LOG_FORMAT=json` to emit single-line JSON logs with `request_id`, `run_id`,
+and `incident_id` fields populated from the ASGI middleware and agent context.
+
 ### Operator-Triggered HTTP Utilities
 
 These are optional tokens for mutating utility endpoints:
@@ -141,4 +163,9 @@ do not replace an operator-owned visual browser pass.
 
 ## Optional Stack Parity Decisions
 
-The PRD lists Celery, Tailwind CSS, shadcn/ui, and an OpenAI-first LLM provider layer as recommended stack items. The local MVP proves the agentic investigation loop without depending on those pieces. Before adding them, decide whether they improve the demo or create infrastructure weight without improving the evidence, eval, approval, or trace story.
+The PRD lists Tailwind CSS, shadcn/ui, and an OpenAI-first LLM provider layer as
+recommended stack items. Celery is already used for async investigation and eval
+runs. The local MVP proves the agentic investigation loop without Tailwind,
+shadcn/ui, or an external LLM. Before adding them, decide whether they improve
+the demo or create infrastructure weight without improving the evidence, eval,
+approval, or trace story.
