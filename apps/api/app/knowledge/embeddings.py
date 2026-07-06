@@ -6,11 +6,14 @@ import math
 import random
 import re
 from collections.abc import Iterable
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 import httpx
 
 from app.models import KNOWLEDGE_EMBEDDING_DIMENSIONS
+
+if TYPE_CHECKING:
+    from app.core.config import Settings
 
 TOKEN_RE = re.compile(r"[a-z0-9]+")
 logger = logging.getLogger(__name__)
@@ -179,14 +182,14 @@ def _normalize(vector: list[float]) -> list[float]:
 
 
 def get_embedding_provider(
-    settings: "app.core.config.Settings" | None = None,
+    settings: Settings | None = None,
 ) -> EmbeddingProvider:
     """Return the configured embedding provider.
 
     Falls back to the local hashing provider when OpenAI is requested but no
     API key is configured, so default behavior is unchanged without credentials.
     """
-    from app.core.config import Settings, get_settings
+    from app.core.config import get_settings
 
     resolved: Settings = settings or get_settings()
     if resolved.embedding_provider == "openai" and resolved.openai_api_key:

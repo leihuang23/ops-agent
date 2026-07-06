@@ -12,7 +12,6 @@ from app.db.types import vector_literal
 from app.knowledge.embeddings import (
     EmbeddingProvider,
     cosine_similarity,
-    embed_text,
     get_embedding_provider,
     tokenize,
 )
