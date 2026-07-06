@@ -183,15 +183,7 @@ def test_incident_detail_endpoint_shows_accounts_and_metric_evidence(
 def test_incidents_endpoint_lists_seeded_incidents(
     session_factory: Callable[[], Session],
 ) -> None:
-    with session_factory() as session:
-        reseed_database(session)
-
-    def override_get_db() -> Generator[Session, None, None]:
-        with session_factory() as db:
-            yield db
-
-    app.dependency_overrides[get_db] = override_get_db
-    client = TestClient(app)
+    client = _seeded_incidents_client(session_factory)
     try:
         response = client.get("/incidents")
     finally:
@@ -199,8 +191,10 @@ def test_incidents_endpoint_lists_seeded_incidents(
 
     assert response.status_code == 200
     payload = response.json()
-    assert len(payload) == 6
-    assert payload[0].keys() == {
+    assert payload["total"] == 6
+    incidents = payload["incidents"]
+    assert len(incidents) == 6
+    assert incidents[0].keys() == {
         "id",
         "title",
         "status",
@@ -210,7 +204,7 @@ def test_incidents_endpoint_lists_seeded_incidents(
         "summary",
         "affected_account_count",
     }
-    assert any(item["affected_account_count"] == 6 for item in payload)
+    assert any(item["affected_account_count"] == 6 for item in incidents)
 
 
 def test_incident_endpoints_return_not_found_for_unknown_ids(
@@ -328,6 +322,79 @@ def test_incident_detail_uses_persisted_signal_evidence_snapshot(
 
         detail = get_incident_detail(session, incident_id)
 
-        assert detail is not None
-        assert detail.support_signals[0].subject == saved_support["subject"]
-        assert detail.product_signals[0].event_name == saved_product["event_name"]
+    assert detail is not None
+    assert detail.support_signals[0].subject == saved_support["subject"]
+    assert detail.product_signals[0].event_name == saved_product["event_name"]
+
+
+def _seeded_incidents_client(session_factory: Callable[[], Session]) -> TestClient:
+    """Reseed and return a TestClient wired to the seeded session factory."""
+    with session_factory() as session:
+        reseed_database(session)
+
+    def override_get_db() -> Generator[Session, None, None]:
+        with session_factory() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+    return TestClient(app)
+
+
+def test_incidents_endpoint_returns_paginated_envelope(
+    session_factory: Callable[[], Session],
+) -> None:
+    """GET /incidents must return { total, incidents } with all rows by default."""
+    client = _seeded_incidents_client(session_factory)
+    try:
+        response = client.get("/incidents")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert set(payload.keys()) == {"total", "incidents"}
+    assert payload["total"] == 6
+    assert len(payload["incidents"]) == 6
+    assert payload["incidents"][0].keys() == {
+        "id",
+        "title",
+        "status",
+        "severity",
+        "anomaly_type",
+        "detected_at",
+        "summary",
+        "affected_account_count",
+    }
+
+
+def test_incidents_endpoint_respects_limit_and_offset(
+    session_factory: Callable[[], Session],
+) -> None:
+    """GET /incidents?limit=&offset= must slice the result set and keep total."""
+    client = _seeded_incidents_client(session_factory)
+    try:
+        page_one = client.get("/incidents?limit=2&offset=0")
+        page_two = client.get("/incidents?limit=2&offset=2")
+        last_page = client.get("/incidents?limit=10&offset=5")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert page_one.status_code == 200
+    body_one = page_one.json()
+    assert body_one["total"] == 6
+    assert len(body_one["incidents"]) == 2
+
+    assert page_two.status_code == 200
+    body_two = page_two.json()
+    assert body_two["total"] == 6
+    assert len(body_two["incidents"]) == 2
+
+    # Pages must not overlap
+    page_one_ids = {item["id"] for item in body_one["incidents"]}
+    page_two_ids = {item["id"] for item in body_two["incidents"]}
+    assert page_one_ids.isdisjoint(page_two_ids)
+
+    # Offset beyond the last row returns an empty slice but total stays accurate
+    assert last_page.status_code == 200
+    assert last_page.json()["total"] == 6
+    assert len(last_page.json()["incidents"]) == 1

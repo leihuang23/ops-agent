@@ -100,11 +100,19 @@ def detect_revenue_anomalies(session: Session) -> list[RevenueAnomaly]:
     ]
 
 
-def list_incidents(session: Session) -> list[IncidentSummary]:
+def list_incidents(
+    session: Session, *, limit: int = 50, offset: int = 0
+) -> tuple[list[IncidentSummary], int]:
+    total = int(
+        session.scalar(select(func.count()).select_from(Incident)) or 0
+    )
     rows = session.scalars(
-        select(Incident).order_by(Incident.detected_at.desc(), Incident.id)
+        select(Incident)
+        .order_by(Incident.detected_at.desc(), Incident.id)
+        .limit(limit)
+        .offset(offset)
     ).all()
-    return [
+    summaries = [
         IncidentSummary(
             id=incident.id,
             title=incident.title,
@@ -117,6 +125,7 @@ def list_incidents(session: Session) -> list[IncidentSummary]:
         )
         for incident in rows
     ]
+    return summaries, total
 
 
 def create_or_get_incident_from_anomaly(

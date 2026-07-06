@@ -1,0 +1,200 @@
+# PRD-Alignment Review
+
+**Date:** 2026-07-06
+**Scope:** Full codebase audit of `ops-agent` (FastAPI `apps/api` + Next.js `apps/web`) against `prd.md` and `AGENTS.md`.
+**Method:** Five parallel read-only audits (feature completeness, stability, performance, UX, production readiness), each citing `file:line` evidence. Findings consolidated below.
+
+---
+
+## 1. Executive Summary
+
+The implementation is a **credible, production-shaped demo MVP** that meets every PRD success criterion. All 12 core API routes and all 14 data models exist and are wired. The investigation loop is real (LangGraph workflow → tools → evidence → report → approval-gated actions), not a stub. Citations are **structurally enforced** via Pydantic schemas, not merely prompted. Approval gating genuinely blocks risky actions. Every run records trace, steps, token/cost, and a final report. 125 backend behavior/contract tests plus a Playwright E2E cover the core loop.
+
+**Overall PRD compliance: COMPLIANT** on all five success criteria, with caveats noted below.
+
+The codebase's strongest dimension is **evidence discipline and auditability**; its weakest is **operational hardening** (concurrency safety on approvals, cache/resource lifecycle, error handling on a few routes). None of the gaps violate the PRD's stated demo scope, but two — the **double-approval race** and the **eval-suite crash-on-single-failure** — directly undermine stated PRD success criteria and should be fixed before any reviewer run.
+
+### Headline scores
+
+| Dimension | Rating |
+|---|---|
+| Feature completeness vs PRD | **COMPLIANT** (2 partial notes) |
+| Stability & reliability | **ADEQUATE** (4 weak spots) |
+| Performance & efficiency | **ADEQUATE** (6 suboptimal spots, none critical at demo scale) |
+| UX / frontend | **STRONG** operationally; **WEAK** on accessibility |
+| Production readiness (demo scope) | **NEAR-READY** to **PRODUCTION-READY** |
+| Production readiness (real SaaS) | **NOT-READY** (no real auth, no ops metrics) — out of PRD scope |
+
+---
+
+## 2. Feature Completeness
+
+### PRD Success Criteria — all met
+
+| # | Criterion | Verdict | Evidence |
+|---|---|---|---|
+| 1 | ≥5 seeded incident scenarios | **COMPLIANT** | [seed.py:51-127](file:///Users/leihuang/workspace/ops-agent/apps/api/app/seed.py) defines 5 scenarios with confounders; `test_evals.py:49` asserts count |
+| 2 | Root cause for ≥4 of 5 evals | **COMPLIANT** (caveat) | [runner.py:47-94](file:///Users/leihuang/workspace/ops-agent/apps/api/app/evals/runner.py) runs real investigations; `test_evals.py:69` asserts `>=4` |
+| 3 | Final reports cite SQL/tickets/docs | **COMPLIANT** (structural) | [schemas.py:43-51](file:///Users/leihuang/workspace/ops-agent/apps/api/app/agent/schemas.py); [workflow.py:405-455](file:///Users/leihuang/workspace/ops-agent/apps/api/app/agent/workflow.py) |
+| 4 | Risky actions blocked until approved | **COMPLIANT** | [approvals/service.py:23,62-129,245-322](file:///Users/leihuang/workspace/ops-agent/apps/api/app/approvals/service.py) |
+| 5 | Every run has trace/steps/tokens/cost/report | **COMPLIANT** | [models.py:243-296](file:///Users/leihuang/workspace/ops-agent/apps/api/app/models.py); [tracing.py:239-278](file:///Users/leihuang/workspace/ops-agent/apps/api/app/agent/tracing.py) |
+
+### Caveats (not blockers, worth knowing)
+
+1. **The "4 of 5" bar is reliable but deterministic.** [runner.py:238-243](file:///Users/leihuang/workspace/ops-agent/apps/api/app/evals/runner.py) scores root cause by exact normalized-string equality. The actual root cause comes from a deterministic keyword classifier ([workflow.py:627-729](file:///Users/leihuang/workspace/ops-agent/apps/api/app/agent/workflow.py)); the LLM path is optional and falls back to the deterministic classifier when disabled or unsupported. This is consistent with AGENTS.md ("LLM should synthesize, not invent evidence") but means the eval does **not** exercise LLM intelligence by default. A reviewer who configures `OPENAI_API_KEY` and runs the suite will still see passes driven by the deterministic path unless they also weaken the fallback.
+
+2. **No seeded "unknown-root-cause" eval scenario.** AGENTS.md asks for negative/ambiguous cases. The agent **does** support ambiguity: `_diagnose_from_evidence` returns an `is_specific=False` diagnosis ([workflow.py:718-729](file:///Users/leihuang/workspace/ops-agent/apps/api/app/agent/workflow.py)) and `_report_claims` emits an `uncertainty` claim ([workflow.py:379-389](file:///Users/leihuang/workspace/ops-agent/apps/api/app/agent/workflow.py)), tested at `test_agent_investigations.py:762-835` with a synthetic incident. But none of the 5 seeded `EvalCase` rows exercises it. Capability present and tested; not exercised by the seeded suite.
+
+### Other completeness checks
+
+- **Confounders in seed data — COMPLIANT with AGENTS.md:** noisy tickets (4 per account, only some tagged), partial outages (`event_number % 4 == 0`), invoice timing (backdated May 29 invoice), plan changes (enterprise/scale/team), churn (canceled subs), failed payments with recovered reasons (`(account_number + month_index) % 23 == 0`), usage shifts.
+- **All 12 API routes exist** and are registered in [main.py:60-69](file:///Users/leihuang/workspace/ops-agent/apps/api/app/main.py).
+- **All 14 data models exist** in [models.py](file:///Users/leihuang/workspace/ops-agent/apps/api/app/models.py) plus a bonus `ActionAuditEvent` for audit trails.
+- **RAG with pgvector — COMPLIANT, not stubbed:** [search.py:94-113](file:///Users/leihuang/workspace/ops-agent/apps/api/app/knowledge/search.py) uses real `1 - (embedding <=> vector)` cosine distance; HNSW index created in migration `20260612_0003:132-138`. Default embeddings are a local SHA-256 hashing projection (semantically weak but deterministic and free); real OpenAI embeddings are wired ([embeddings.py:120-152](file:///Users/leihuang/workspace/ops-agent/apps/api/app/knowledge/embeddings.py)) when configured.
+- **Metrics are deterministic — COMPLIANT:** pure SQL aggregations in [metrics/service.py](file:///Users/leihuang/workspace/ops-agent/apps/api/app/metrics/service.py); no LLM anywhere in the metrics path.
+- **Tool boundaries explicit — COMPLIANT:** 4 read-only tools (SQL/account/docs/tickets) in [tools.py](file:///Users/leihuang/workspace/ops-agent/apps/api/app/agent/tools.py); actions are proposed post-report structurally, never called by the LLM. No real external writes anywhere.
+
+---
+
+## 3. Stability & Reliability
+
+| Sub-area | Rating | Key evidence |
+|---|---|---|
+| LLM failure handling | ADEQUATE | [workflow.py:560-568](file:///Users/leihuang/workspace/ops-agent/apps/api/app/agent/workflow.py) catches all exceptions, falls back to deterministic |
+| Malformed LLM output rejection | STRONG | [client.py:177-189](file:///Users/leihuang/workspace/ops-agent/apps/api/app/llm/client.py) raises on bad JSON |
+| Tool failures in run history | STRONG | [persistence.py:50-55,111-120](file:///Users/leihuang/workspace/ops-agent/apps/api/app/agent/persistence.py) records failed steps |
+| Global exception handling | **WEAK** | [main.py:40-49](file:///Users/leihuang/workspace/ops-agent/apps/api/app/main.py) only handles `RateLimitExceeded`; no structured error envelope |
+| Route error → status mapping | **WEAK** | `knowledge/router.py` and `evals/router.py` have no try/except |
+| Eval suite resilience | **WEAK** | [runner.py:53-71](file:///Users/leihuang/workspace/ops-agent/apps/api/app/evals/runner.py) no per-case try/except; one failure kills the suite and persists nothing |
+| Correlation IDs in logs | **WEAK** | `request_id_context` set in middleware ([main.py:22,54](file:///Users/leihuang/workspace/ops-agent/apps/api/app/main.py)) but never injected into log records — no `logging.Filter` |
+| Redis lifecycle | **WEAK** | `Cache()` constructed per call with a synchronous `ping()` ([cache.py:59-67](file:///Users/leihuang/workspace/ops-agent/apps/api/app/cache.py)); 2s stall per call on Redis outage; pools never closed |
+| Celery task timeouts | **WEAK** | no `task_time_limit`/`soft_time_limit` ([celery_app.py:8-25](file:///Users/leihuang/workspace/ops-agent/apps/api/app/celery_app.py)); `max_retries=3` is dead config ([tasks.py:7](file:///Users/leihuang/workspace/ops-agent/apps/api/app/agent/tasks.py) never calls `self.retry`) |
+| DB session scoping | ADEQUATE | `pool_pre_ping=True`; `with SessionLocal()` everywhere; no `pool_recycle` |
+| Concurrent-run guard | STRONG | partial unique index (`migration 0007`) + atomic claim ([service.py:164-187](file:///Users/leihuang/workspace/ops-agent/apps/api/app/agent/service.py)) |
+| **Double-approval race** | **WEAK** | [approvals/service.py:245-322](file:///Users/leihuang/workspace/ops-agent/apps/api/app/approvals/service.py) read-modify-write with no atomic guard |
+
+### Highest-impact reliability gaps
+
+1. **Double-approval race** — `approve_request`/`reject_request` ([approvals/service.py:245-322](file:///Users/leihuang/workspace/ops-agent/apps/api/app/approvals/service.py)) do `session.get` → check status → mutate → commit with no optimistic lock, no `SELECT FOR UPDATE`, no conditional `UPDATE … WHERE status='pending'` with rowcount check. Two concurrent approvers both succeed; the audit trail duplicates; a concurrent approve+reject can leave the action `executed` while the approval record is `rejected`. Blast radius is limited because actions are mocks, but this directly contradicts the PRD's approval-gating success criterion. The agent-run claim path ([service.py:164-187](file:///Users/leihuang/workspace/ops-agent/apps/api/app/agent/service.py)) already uses the correct conditional-UPDATE pattern — reuse it here.
+
+2. **Eval suite crashes on any single case failure** — [runner.py:53-71](file:///Users/leihuang/workspace/ops-agent/apps/api/app/evals/runner.py) has no per-case try/except. A single `IntegrityError` or missing incident makes the whole suite raise before `session.commit()` at line 73-74, so **zero results persist** and the eval endpoint returns 500. This undermines "≥4 of 5" because one bad case makes the suite unrunnable rather than scoring that case as failed.
+
+3. **`Cache()` per-call ping** — every cache read/write constructs a new `Cache()` that issues a Redis `PING` ([cache.py:59-67](file:///Users/leihuang/workspace/ops-agent/apps/api/app/cache.py)), doubling latency and stalling up to 2s per call when Redis is down. 7 call sites, including `get_run_detail` which constructs it twice.
+
+4. **Request-ID not wired to logs** — the infra exists (`request_id_context` ContextVar, `JsonFormatter` checks `record.request_id`) but no `logging.Filter` copies the ContextVar onto records, so request-scoped logs cannot be correlated.
+
+5. **No Celery task time limit** — a hung non-LLM operation blocks a worker indefinitely; `ACTIVE_RUN_STALE_AFTER` only marks the DB row failed on next access, it does not kill the task.
+
+---
+
+## 4. Performance & Efficiency
+
+Indexing and SQL aggregation discipline are **solid**; pgvector HNSW is correctly applied; token/cost estimation is cheap (local tiktoken + dict lookup). The workflow is a fixed linear DAG (one LLM call per run), so runaway cost is impossible by construction. Main risks are operational.
+
+| # | Issue | Rating | Location |
+|---|---|---|---|
+| 1 | `Cache()` per-call `ping()`, no singleton, no stampede protection | SUBOPTIMAL | [cache.py:59-67,129-143](file:///Users/leihuang/workspace/ops-agent/apps/api/app/cache.py) |
+| 2 | No Celery `task_time_limit`/concurrency config | SUBOPTIMAL | [celery_app.py:8-25](file:///Users/leihuang/workspace/ops-agent/apps/api/app/celery_app.py) |
+| 3 | Eval suite runs synchronously inside the HTTP request | SUBOPTIMAL | [evals/router.py:45-54](file:///Users/leihuang/workspace/ops-agent/apps/api/app/evals/router.py); [runner.py:47-94](file:///Users/leihuang/workspace/ops-agent/apps/api/app/evals/runner.py) |
+| 4 | Duplicate `unresolved_count` query identical to `failed_count` | SUBOPTIMAL | [metrics/service.py:119-145](file:///Users/leihuang/workspace/ops-agent/apps/api/app/metrics/service.py) |
+| 5 | Multiple scalar queries foldable into one conditional aggregation | SUBOPTIMAL | [metrics/service.py:33-57,76-101,234-265](file:///Users/leihuang/workspace/ops-agent/apps/api/app/metrics/service.py) |
+| 6 | `list_incidents` loads all incidents, no pagination | SUBOPTIMAL | [incidents/service.py:103-119](file:///Users/leihuang/workspace/ops-agent/apps/api/app/incidents/service.py) |
+| 7 | Missing composite `(status, invoice_date)` / `(status, canceled_at)` indexes for hot dashboard filters | ADEQUATE-gap | migrations + [metrics/service.py:121-145](file:///Users/leihuang/workspace/ops-agent/apps/api/app/metrics/service.py) |
+| 8 | `AgentRunRecorder` commits after every step (~14 commits/run) | SUBOPTIMAL | [persistence.py:81,109,119](file:///Users/leihuang/workspace/ops-agent/apps/api/app/agent/persistence.py) |
+| 9 | Eval cases run sequentially, not in parallel | SUBOPTIMAL | [runner.py:53](file:///Users/leihuang/workspace/ops-agent/apps/api/app/evals/runner.py) |
+| 10 | OpenAI embeddings batched per-document, not per-corpus | ADEQUATE-gap | [ingestion.py:231-232,401](file:///Users/leihuang/workspace/ops-agent/apps/api/app/knowledge/ingestion.py) |
+| 11 | No explicit `max_steps` cap (safe today only because graph is linear) | ADEQUATE-gap | [workflow.py:218-224](file:///Users/leihuang/workspace/ops-agent/apps/api/app/agent/workflow.py) |
+
+None of these are critical at demo data volume. The most worthwhile fixes are #1 (cache singleton), #3 (move eval to Celery or a background task), and #8 (batch step commits).
+
+---
+
+## 5. User Experience
+
+The frontend is **consistently operational, not marketing** — satisfying AGENTS.md's "build the investigation workspace first." Failure visibility is the strongest area.
+
+| Area | Rating | Headline |
+|---|---|---|
+| Investigation workspace | STRONG | All six required surfaces present; auto-refresh every 2.5s for 10 min; run timeline shows failed steps |
+| Failure visibility | STRONG | Errors, stale runs, failed steps, low confidence, rejected approvals, eval failures all surfaced |
+| Approval queue | ADEQUATE | Visible, gated, color-coded; no status-filter UI; no success toast |
+| Other pages | ADEQUATE | Incidents/accounts/tickets/knowledge are real; `/support/tickets` orphaned (not in nav); no `/accounts` list page |
+| Nav & layout | ADEQUATE | Core loop nav present; missing Support/Accounts; no `aria-current` |
+| API integration | STRONG | Robust error handling, env-based URL resolution, demo token handled server-side only |
+| **Accessibility** | **WEAK** | No global `:focus-visible` (only one input has a focus ring); no skip link; no `aria-current`; small muted text borderline contrast |
+| Responsiveness | STRONG | Two breakpoints collapse grids to single column; tables scroll horizontally |
+| Feedback | ADEQUATE | Good empty/error states; no toasts, no optimistic UI |
+| E2E / smoke | ADEQUATE | One happy-path Playwright + source-string smoke; failure paths untested end-to-end |
+
+### Top UX fixes
+
+1. **Add a global `:focus-visible` style** in [globals.css](file:///Users/leihuang/workspace/ops-agent/apps/web/app/globals.css) for `a, button, input, select, textarea`. Currently only `.knowledge-search-input` has a focus ring — keyboard users cannot see where they are.
+2. **Cross-link entities**: render account names and ticket ids as `<Link>` in [runs/[runId]/page.tsx:186-194](file:///Users/leihuang/workspace/ops-agent/apps/web/app/agent/runs/[runId]/page.tsx) and [incidents/[incidentId]/page.tsx:156-183](file:///Users/leihuang/workspace/ops-agent/apps/web/app/incidents/[incidentId]/page.tsx). The destination pages exist.
+3. **Add Support (and consider Accounts) to [Nav.tsx](file:///Users/leihuang/workspace/ops-agent/apps/web/app/Nav.tsx)**; add `aria-current="page"`.
+4. **Add an empty-state message to `EvidencePanel`** ([page.tsx:364-395](file:///Users/leihuang/workspace/ops-agent/apps/web/app/agent/runs/[runId]/page.tsx)) for consistency with `ClaimPanel`.
+5. **Add a failure-path E2E** to [demo-flow.spec.ts](file:///Users/leihuang/workspace/ops-agent/apps/web/e2e/demo-flow.spec.ts) (failed run / rejected approval / low confidence) — the strongest UX differentiator is the least tested.
+
+---
+
+## 6. Production Readiness
+
+Framing: per AGENTS.md/prd.md this is a **demo-shaped portfolio app** whose deploy target is a reviewer laptop. Rated against that intent, then separately flagged for real production.
+
+| Area | Rating (demo) | Rating (real prod) | Key evidence |
+|---|---|---|---|
+| Security | NEAR-READY | NOT-READY | env-gated fail-closed, parameterized SQL, token-gated mutations, no hardcoded secrets, fake PII / no general auth on reads, loose rate-limit defaults, no CSP |
+| Deployment config | NEAR-READY | — | multi-stage non-root Dockerfiles, entrypoint runs migrations + advisory-locked bootstrap, healthchecks, dependency ordering / no restart policy, no resource limits, no log rotation |
+| Monitoring & alerting | NEAR-READY | — | real Langfuse/LangSmith tracing with local fallback, JSON logging, `/ready` checks DB+Redis / no Prometheus, no token/cost aggregation, no alerting |
+| Documentation | PRODUCTION-READY | — | README + runbook + human-assistance + 6 learning guides; minor staleness (runbook says 71 tests, now 125) |
+| Tests & coverage | PRODUCTION-READY | — | 125 behavior/contract tests; PRD 4-of-5 directly asserted; approval-gating negative cases; full investigation loop; Playwright E2E |
+
+### Security specifics
+
+- **Secrets — GOOD:** `pydantic-settings` with `.env`; `.env` not committed (only `*.env.example`); no hardcoded secrets in code (test fixtures only).
+- **Auth — demo-only:** `require_demo_data_access` ([access.py:12-21](file:///Users/leihuang/workspace/ops-agent/apps/api/app/core/access.py)) 403s unless `app_env in {local,test,development,demo}`. Mutations gated by `X-Demo-Operator-Token` via `secrets.compare_digest` ([access.py:24-45](file:///Users/leihuang/workspace/ops-agent/apps/api/app/core/access.py)). No general auth on reads — acceptable for demo, not for real SaaS.
+- **SQL injection — SAFE:** all queries use SQLAlchemy 2 ORM with bound parameters; `source_query` strings in citations are display-only, never executed; the LLM does not generate SQL.
+- **pgvector — SAFE:** `CAST(:embedding AS vector)` with bound parameter ([search.py:105-112](file:///Users/leihuang/workspace/ops-agent/apps/api/app/knowledge/search.py)).
+- **Input validation — GOOD:** `KnowledgeSearchRequest.query` bounded `min_length=1, max_length=400`; `IncidentCreate` only accepts `anomaly_id`; `POST /documents/ingest` takes no body (re-ingests built-in markdown only).
+- **Payload validation — GOOD:** `validate_action_payload` rejects unsupported fields (e.g., `send_now` → 422), tested at `test_approvals_and_actions.py:146-168`.
+
+### Test coverage gaps (PRD-relevant)
+
+- `/ready` endpoint failure modes (Postgres down, Redis down) not unit-tested.
+- Rate limiting tested on a synthetic app, not on real decorated routes.
+- Celery worker path (`investigate_incident.delay`) only exercised by docker-smoke CI, not a unit test.
+- No end-to-end test that `OBSERVABILITY_FULL_PAYLOADS=false` actually withholds evidence from a hosted provider (summarization logic tested in isolation only).
+
+---
+
+## 7. Cross-Cutting Priorities
+
+Ranked by impact on PRD success criteria and reviewer trust:
+
+| Priority | Issue | Area | Effort |
+|---|---|---|---|
+| **P0** | Double-approval race in `approve_request`/`reject_request` — apply conditional-UPDATE-with-rowcount pattern | Stability / PRD #4 | Small |
+| **P0** | Eval suite crashes on single-case failure — wrap each case in try/except, persist a failed `EvalResult`, continue | Stability / PRD #2 | Small |
+| **P1** | `Cache()` per-call ping + no singleton — module-level Redis client, drop constructor `ping()` | Stability + Performance | Small |
+| **P1** | Request-ID not wired to logs — add a `logging.Filter` copying `request_id_context` onto records | Stability | Small |
+| **P1** | Global exception handler + structured error envelope in `main.py` | Stability | Small |
+| **P1** | Celery `task_time_limit`/`soft_time_limit`; remove dead `max_retries` or implement `self.retry` | Stability | Small |
+| **P2** | Move eval suite off the HTTP request path (Celery or background task) | Performance | Medium |
+| **P2** | Seed one "unknown-root-cause" eval scenario to exercise the ambiguity path | Feature completeness | Medium |
+| **P2** | Global `:focus-visible` style + skip link + `aria-current` (a11y) | UX | Small |
+| **P2** | Cross-link accounts/tickets in run + incident pages; add Support to nav | UX | Small |
+| **P3** | Composite indexes for `(status, invoice_date)` / `(status, canceled_at)` | Performance | Small |
+| **P3** | Consolidate duplicate/scalar metric queries; paginate `list_incidents` | Performance | Small |
+| **P3** | Add a failure-path Playwright E2E | UX / Tests | Medium |
+| **P3** | Add `/ready` failure-mode tests and real-route rate-limit tests | Tests | Small |
+
+---
+
+## 8. Overall Assessment
+
+**Is the implementation PRD-compliant?** **Yes.** All five success criteria are met with structural enforcement (not just prompts), real tool boundaries, real pgvector RAG, deterministic metrics, and a complete audit trail. The 125-test suite directly asserts the PRD's "4 of 5," approval-gating, citation, and trace requirements.
+
+**Is it production-ready?** For its **intended demo/reviewer scope: yes, near-ready.** Documentation and tests are production-grade. Security is appropriately fail-closed for a demo. The remaining work is operational hardening.
+
+**What would block a real multi-tenant production deploy (out of PRD scope)?** Real authentication, real rate-limit defaults, CSP/security headers, Prometheus metrics + token/cost aggregation, alerting, and the P0/P1 reliability fixes above.
+
+**The two fixes that most protect the PRD's claims before a reviewer run:** the double-approval race and the eval-suite crash-on-single-failure. Both are small, both directly undermine stated success criteria, and both have existing patterns in the codebase to copy (conditional-UPDATE for approvals; try/except-per-case for evals).

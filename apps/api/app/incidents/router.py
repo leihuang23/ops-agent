@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.core.access import require_demo_data_access, require_demo_operator_access
 from app.db.session import get_db
 
-from .schemas import IncidentCreate, IncidentDetail, IncidentSummary
+from .schemas import IncidentCreate, IncidentDetail, IncidentList
 from .service import (
     create_or_get_incident_from_anomaly,
     get_incident_detail,
@@ -21,8 +21,13 @@ router = APIRouter(
 
 
 @router.get("")
-def incidents(db: Session = Depends(get_db)) -> list[IncidentSummary]:
-    return list_incidents(db)
+def incidents(
+    db: Session = Depends(get_db),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> IncidentList:
+    summaries, total = list_incidents(db, limit=limit, offset=offset)
+    return IncidentList(total=total, incidents=summaries)
 
 
 @router.post("", dependencies=[Depends(require_demo_operator_access)])

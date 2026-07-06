@@ -19,7 +19,7 @@ export default async function IncidentsPage() {
     );
   }
 
-  const incidents = result.data;
+  const { incidents, total } = result.data;
 
   return (
     <main className="dashboard-shell">
@@ -33,7 +33,7 @@ export default async function IncidentsPage() {
       <section className="panel table-panel">
         <div className="panel-header">
           <h2>All incidents</h2>
-          <span>{incidents.length} total</span>
+          <span>{total} total</span>
         </div>
         <div className="table-wrap">
           <table>

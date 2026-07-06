@@ -7,7 +7,7 @@ import threading
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import create_engine, event, func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -17,7 +17,15 @@ from app.db.session import get_db
 from app.main import app
 from app.core.config import get_settings
 from app.metrics.router import require_demo_metrics_access
-from app.metrics.service import get_dashboard_metrics
+from app.metrics.service import (
+    get_active_user_metrics,
+    get_churn_metrics,
+    get_dashboard_metrics,
+    get_dataset_anchor,
+    get_failed_invoice_metrics,
+    get_mrr_metrics,
+    get_ticket_volume_metrics,
+)
 from app.models import (
     Account,
     Invoice,
@@ -234,6 +242,102 @@ def test_core_metric_queries_match_seeded_incidents(
             "billing",
             "product",
         }
+
+
+def _count_queries(session: Session, fn: Callable[[], object]) -> int:
+    """Count SQL round-trips executed by fn against the session's engine."""
+    engine = session.get_bind()
+    counter = {"n": 0}
+
+    @event.listens_for(engine, "before_cursor_execute")
+    def _count(*_args, **_kwargs) -> None:
+        counter["n"] += 1
+
+    try:
+        fn()
+    finally:
+        event.remove(engine, "before_cursor_execute", _count)
+
+    return counter["n"]
+
+
+def test_failed_invoice_unresolved_count_matches_failed_count(
+    session_factory: Callable[[], Session],
+) -> None:
+    """unresolved_count_30d must equal failed_count_30d.
+
+    Both previously ran the same COUNT(*) WHERE status='failed' AND
+    invoice_date >= cutoff query; the duplicate is removed but the field is
+    retained for API backwards compatibility and must stay consistent.
+    """
+    with session_factory() as session:
+        reseed_database(session)
+        anchor = get_dataset_anchor(session)
+        metrics = get_failed_invoice_metrics(session, anchor)
+        assert metrics.unresolved_count_30d == metrics.failed_count_30d
+
+
+def test_mrr_metrics_uses_single_aggregation_round_trip(
+    session_factory: Callable[[], Session],
+) -> None:
+    """get_mrr_metrics must consolidate the three scalar queries into one."""
+    with session_factory() as session:
+        reseed_database(session)
+        anchor = get_dataset_anchor(session)
+        count = _count_queries(session, lambda: get_mrr_metrics(session, anchor))
+        assert count <= 1, f"Expected <=1 query, got {count}"
+
+
+def test_churn_metrics_uses_single_aggregation_round_trip(
+    session_factory: Callable[[], Session],
+) -> None:
+    """get_churn_metrics must consolidate the three scalar queries into one."""
+    with session_factory() as session:
+        reseed_database(session)
+        anchor = get_dataset_anchor(session)
+        count = _count_queries(session, lambda: get_churn_metrics(session, anchor))
+        assert count <= 1, f"Expected <=1 query, got {count}"
+
+
+def test_failed_invoice_metrics_uses_two_round_trips(
+    session_factory: Callable[[], Session],
+) -> None:
+    """get_failed_invoice_metrics must issue one aggregate + one sample query.
+
+    Before consolidation it issued four queries (failed_count, failed_amount,
+    unresolved_count duplicate, recent_failures sample).
+    """
+    with session_factory() as session:
+        reseed_database(session)
+        anchor = get_dataset_anchor(session)
+        count = _count_queries(session, lambda: get_failed_invoice_metrics(session, anchor))
+        assert count <= 2, f"Expected <=2 queries, got {count}"
+
+
+def test_ticket_volume_metrics_uses_two_round_trips(
+    session_factory: Callable[[], Session],
+) -> None:
+    """get_ticket_volume_metrics must issue one aggregate + one group-by query.
+
+    Before consolidation it issued four queries (total, open, high-priority,
+    by-category).
+    """
+    with session_factory() as session:
+        reseed_database(session)
+        anchor = get_dataset_anchor(session)
+        count = _count_queries(session, lambda: get_ticket_volume_metrics(session, anchor))
+        assert count <= 2, f"Expected <=2 queries, got {count}"
+
+
+def test_active_user_metrics_uses_single_aggregation_round_trip(
+    session_factory: Callable[[], Session],
+) -> None:
+    """get_active_user_metrics must consolidate the four scalar queries into one."""
+    with session_factory() as session:
+        reseed_database(session)
+        anchor = get_dataset_anchor(session)
+        count = _count_queries(session, lambda: get_active_user_metrics(session, anchor))
+        assert count <= 1, f"Expected <=1 query, got {count}"
 
 
 def test_seeded_records_are_referentially_consistent(

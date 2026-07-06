@@ -4,10 +4,11 @@ import threading
 import time
 from collections.abc import Callable, Generator
 from datetime import datetime, timedelta
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, event, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -17,7 +18,7 @@ from app.agent.schemas import (
     ReportAffectedAccount,
     ReportEvidence,
 )
-from app.agent.persistence import utcnow_naive
+from app.agent.persistence import AgentRunRecorder, utcnow_naive
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
@@ -1006,3 +1007,146 @@ def test_investigation_create_respects_idempotency_key(
     assert first.status_code == 201
     assert second.status_code == 200
     assert first.json()["id"] == second.json()["id"]
+
+
+def _make_test_run(incident_id: str) -> AgentRun:
+    return AgentRun(
+        id=f"run_{uuid4().hex[:16]}",
+        incident_id=incident_id,
+        status="running",
+        trace_id=None,
+        trace_url=None,
+        trace_provider=None,
+        trace_metadata={},
+        input_payload={"incident_id": incident_id},
+        final_report=None,
+        token_estimate=0,
+        prompt_tokens=0,
+        completion_tokens=0,
+        cost_estimate_usd=0.0,
+        error=None,
+        started_at=utcnow_naive(),
+        completed_at=None,
+        created_at=utcnow_naive(),
+        updated_at=utcnow_naive(),
+    )
+
+
+def test_recorder_does_not_commit_per_step(
+    session_factory: Callable[[], Session],
+) -> None:
+    """AgentRunRecorder must batch commits instead of committing after each step."""
+    commit_count = {"n": 0}
+
+    def _count_commit(session: Session) -> None:
+        # Filter out SAVEPOINT releases — only count outer-transaction commits.
+        if not session.in_nested_transaction():
+            commit_count["n"] += 1
+
+    event.listen(Session, "before_commit", _count_commit)
+    try:
+        with session_factory() as session:
+            reseed_database(session)
+            incident = session.scalar(select(Incident))
+            assert incident is not None
+            run = _make_test_run(incident.id)
+            session.add(run)
+            session.commit()
+
+            baseline = commit_count["n"]
+            recorder = AgentRunRecorder(session, run)
+            for i in range(7):
+                recorder.record(
+                    stage=f"stage_{i}",
+                    inputs={"i": i},
+                    action=lambda i=i: {"result": i},
+                )
+            recorder_commits = commit_count["n"] - baseline
+            assert recorder_commits < 7, (
+                f"Expected batched commits (<7 for 7 steps), got {recorder_commits}"
+            )
+    finally:
+        event.remove(Session, "before_commit", _count_commit)
+
+
+def test_recorder_failure_does_not_rollback_previous_steps(
+    session_factory: Callable[[], Session],
+) -> None:
+    """A failed step must not roll back previously successful steps."""
+
+    def _boom() -> dict[str, str]:
+        raise ValueError("boom")
+
+    with session_factory() as session:
+        reseed_database(session)
+        incident = session.scalar(select(Incident))
+        assert incident is not None
+        run = _make_test_run(incident.id)
+        session.add(run)
+        session.commit()
+        run_id = run.id
+
+        recorder = AgentRunRecorder(session, run)
+        for i in range(3):
+            recorder.record(
+                stage=f"success_{i}",
+                inputs={"i": i},
+                action=lambda i=i: {"result": i},
+            )
+
+        with pytest.raises(ValueError, match="boom"):
+            recorder.record(
+                stage="fail_step",
+                inputs={},
+                action=_boom,
+            )
+
+        session.commit()
+
+    with session_factory() as session:
+        steps = session.scalars(
+            select(AgentRunStep)
+            .where(AgentRunStep.run_id == run_id)
+            .order_by(AgentRunStep.sequence)
+        ).all()
+        assert len(steps) == 4
+        assert [s.status for s in steps] == [
+            "succeeded",
+            "succeeded",
+            "succeeded",
+            "failed",
+        ]
+        assert "boom" in (steps[3].error or "")
+
+
+def test_recorder_commits_periodically_for_mid_run_visibility(
+    session_factory: Callable[[], Session],
+) -> None:
+    """After 5+ steps, some steps must be committed and visible to a new session."""
+    with session_factory() as session:
+        reseed_database(session)
+        incident = session.scalar(select(Incident))
+        assert incident is not None
+        run = _make_test_run(incident.id)
+        session.add(run)
+        session.commit()
+        run_id = run.id
+
+        recorder = AgentRunRecorder(session, run)
+        for i in range(6):
+            recorder.record(
+                stage=f"stage_{i}",
+                inputs={"i": i},
+                action=lambda i=i: {"result": i},
+            )
+        # Do NOT call session.commit() — rely on the recorder's periodic commit.
+        # The 6th step is flushed but uncommitted; it will be rolled back when
+        # the session closes. The first 5 steps must already be committed.
+
+    with session_factory() as session:
+        visible_steps = session.scalars(
+            select(AgentRunStep).where(AgentRunStep.run_id == run_id)
+        ).all()
+        assert len(visible_steps) >= 5, (
+            f"Expected >=5 committed steps visible mid-run, got {len(visible_steps)}"
+        )

@@ -251,15 +251,15 @@ function ScenarioCoveragePanel({ result }: { result: IncidentListResult }) {
     <section className="panel scenario-panel">
       <div className="panel-header">
         <h2>Seeded scenario coverage</h2>
-        <span>{result.ok ? `${formatCount(result.data.length)} incidents` : 'Unavailable'}</span>
+        <span>{result.ok ? `${formatCount(result.data.total)} incidents` : 'Unavailable'}</span>
       </div>
       {!result.ok ? (
         <div className="panel-message error-detail">{result.error}</div>
-      ) : result.data.length === 0 ? (
+      ) : result.data.incidents.length === 0 ? (
         <div className="panel-message">No seeded incidents are available for review.</div>
       ) : (
         <div className="scenario-list">
-          {result.data.map((incident) => (
+          {result.data.incidents.map((incident) => (
             <ScenarioRow incident={incident} key={incident.id} />
           ))}
         </div>

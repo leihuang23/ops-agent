@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.cache import cache_result
@@ -30,31 +30,39 @@ def get_mrr_metrics(session: Session, anchor: datetime | None = None) -> MrrMetr
     anchor = anchor or get_dataset_anchor(session)
     churn_cutoff = anchor.date() - timedelta(days=30)
 
-    current_mrr = int(
-        session.scalar(
-            select(func.coalesce(func.sum(Subscription.mrr_cents), 0)).where(
-                Subscription.status == "active"
-            )
+    row = session.execute(
+        select(
+            func.coalesce(
+                func.sum(
+                    case(
+                        (Subscription.status == "active", Subscription.mrr_cents),
+                        else_=0,
+                    )
+                ),
+                0,
+            ).label("current_mrr"),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            (Subscription.status == "canceled")
+                            & (Subscription.canceled_at >= churn_cutoff),
+                            Subscription.mrr_cents,
+                        ),
+                        else_=0,
+                    )
+                ),
+                0,
+            ).label("churned_mrr"),
+            func.count(
+                case((Subscription.status == "active", 1), else_=None)
+            ).label("active_subscriptions"),
         )
-        or 0
-    )
-    previous_churned_mrr = int(
-        session.scalar(
-            select(func.coalesce(func.sum(Subscription.mrr_cents), 0)).where(
-                Subscription.status == "canceled",
-                Subscription.canceled_at >= churn_cutoff,
-            )
-        )
-        or 0
-    )
-    active_subscriptions = int(
-        session.scalar(
-            select(func.count()).select_from(Subscription).where(
-                Subscription.status == "active"
-            )
-        )
-        or 0
-    )
+    ).one()
+
+    current_mrr = int(row.current_mrr or 0)
+    previous_churned_mrr = int(row.churned_mrr or 0)
+    active_subscriptions = int(row.active_subscriptions or 0)
     previous_mrr = current_mrr + previous_churned_mrr
     delta_cents = current_mrr - previous_mrr
     delta_percent = round((delta_cents / previous_mrr) * 100, 2) if previous_mrr else 0.0
@@ -73,32 +81,40 @@ def get_churn_metrics(session: Session, anchor: datetime | None = None) -> Churn
     anchor = anchor or get_dataset_anchor(session)
     churn_cutoff = anchor.date() - timedelta(days=30)
 
-    active_accounts = int(
-        session.scalar(
-            select(func.count()).select_from(Subscription).where(
-                Subscription.status == "active"
-            )
+    row = session.execute(
+        select(
+            func.count(
+                case((Subscription.status == "active", 1), else_=None)
+            ).label("active_accounts"),
+            func.count(
+                case(
+                    (
+                        (Subscription.status == "canceled")
+                        & (Subscription.canceled_at >= churn_cutoff),
+                        1,
+                    ),
+                    else_=None,
+                )
+            ).label("churned_accounts"),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            (Subscription.status == "canceled")
+                            & (Subscription.canceled_at >= churn_cutoff),
+                            Subscription.mrr_cents,
+                        ),
+                        else_=0,
+                    )
+                ),
+                0,
+            ).label("churned_mrr"),
         )
-        or 0
-    )
-    churned_accounts = int(
-        session.scalar(
-            select(func.count()).select_from(Subscription).where(
-                Subscription.status == "canceled",
-                Subscription.canceled_at >= churn_cutoff,
-            )
-        )
-        or 0
-    )
-    churned_mrr = int(
-        session.scalar(
-            select(func.coalesce(func.sum(Subscription.mrr_cents), 0)).where(
-                Subscription.status == "canceled",
-                Subscription.canceled_at >= churn_cutoff,
-            )
-        )
-        or 0
-    )
+    ).one()
+
+    active_accounts = int(row.active_accounts or 0)
+    churned_accounts = int(row.churned_accounts or 0)
+    churned_mrr = int(row.churned_mrr or 0)
     denominator = active_accounts + churned_accounts
     churn_rate = round(churned_accounts / denominator, 4) if denominator else 0.0
 
@@ -116,33 +132,19 @@ def get_failed_invoice_metrics(
     anchor = anchor or get_dataset_anchor(session)
     cutoff = anchor.date() - timedelta(days=30)
 
-    failed_count = int(
-        session.scalar(
-            select(func.count()).select_from(Invoice).where(
-                Invoice.status == "failed",
-                Invoice.invoice_date >= cutoff,
-            )
-        )
-        or 0
-    )
-    failed_amount = int(
-        session.scalar(
-            select(func.coalesce(func.sum(Invoice.amount_cents), 0)).where(
-                Invoice.status == "failed",
-                Invoice.invoice_date >= cutoff,
-            )
-        )
-        or 0
-    )
-    unresolved_count = int(
-        session.scalar(
-            select(func.count()).select_from(Invoice).where(
-                Invoice.status == "failed",
-                Invoice.invoice_date >= cutoff,
-            )
-        )
-        or 0
-    )
+    agg_row = session.execute(
+        select(
+            func.count().label("failed_count"),
+            func.coalesce(func.sum(Invoice.amount_cents), 0).label("failed_amount"),
+        ).where(Invoice.status == "failed", Invoice.invoice_date >= cutoff)
+    ).one()
+
+    failed_count = int(agg_row.failed_count or 0)
+    failed_amount = int(agg_row.failed_amount or 0)
+    # unresolved_count_30d previously ran the identical COUNT(*) query; the
+    # duplicate is removed but the field is retained for API compatibility.
+    unresolved_count = failed_count
+
     rows = session.execute(
         select(
             Invoice.id,
@@ -182,31 +184,34 @@ def get_ticket_volume_metrics(
     anchor = anchor or get_dataset_anchor(session)
     cutoff = anchor - timedelta(days=30)
 
-    total_30d = int(
-        session.scalar(
-            select(func.count()).select_from(SupportTicket).where(
-                SupportTicket.created_at >= cutoff
-            )
+    agg_row = session.execute(
+        select(
+            func.count(
+                case((SupportTicket.created_at >= cutoff, 1), else_=None)
+            ).label("total_30d"),
+            func.count(
+                case(
+                    (SupportTicket.status.in_(("open", "pending")), 1),
+                    else_=None,
+                )
+            ).label("open_tickets"),
+            func.count(
+                case(
+                    (
+                        SupportTicket.status.in_(("open", "pending"))
+                        & (SupportTicket.priority == "high"),
+                        1,
+                    ),
+                    else_=None,
+                )
+            ).label("high_priority_open"),
         )
-        or 0
-    )
-    open_tickets = int(
-        session.scalar(
-            select(func.count()).select_from(SupportTicket).where(
-                SupportTicket.status.in_(("open", "pending"))
-            )
-        )
-        or 0
-    )
-    high_priority_open = int(
-        session.scalar(
-            select(func.count()).select_from(SupportTicket).where(
-                SupportTicket.status.in_(("open", "pending")),
-                SupportTicket.priority == "high",
-            )
-        )
-        or 0
-    )
+    ).one()
+
+    total_30d = int(agg_row.total_30d or 0)
+    open_tickets = int(agg_row.open_tickets or 0)
+    high_priority_open = int(agg_row.high_priority_open or 0)
+
     rows = session.execute(
         select(SupportTicket.category, func.count().label("count"))
         .where(SupportTicket.created_at >= cutoff)
@@ -231,44 +236,38 @@ def get_active_user_metrics(
     cutoff_7d = anchor - timedelta(days=7)
     cutoff_30d = anchor - timedelta(days=30)
 
-    active_users_7d = int(
-        session.scalar(
-            select(func.count(func.distinct(ProductEvent.user_id))).where(
-                ProductEvent.event_time >= cutoff_7d
-            )
+    row = session.execute(
+        select(
+            func.count(
+                func.distinct(
+                    case(
+                        (ProductEvent.event_time >= cutoff_7d, ProductEvent.user_id),
+                        else_=None,
+                    )
+                )
+            ).label("active_users_7d"),
+            func.count(
+                func.distinct(
+                    case(
+                        (ProductEvent.event_time >= cutoff_30d, ProductEvent.user_id),
+                        else_=None,
+                    )
+                )
+            ).label("active_users_30d"),
+            func.count(
+                case((ProductEvent.event_time >= cutoff_7d, 1), else_=None)
+            ).label("event_count_7d"),
+            func.count(
+                case((ProductEvent.event_time >= cutoff_30d, 1), else_=None)
+            ).label("event_count_30d"),
         )
-        or 0
-    )
-    active_users_30d = int(
-        session.scalar(
-            select(func.count(func.distinct(ProductEvent.user_id))).where(
-                ProductEvent.event_time >= cutoff_30d
-            )
-        )
-        or 0
-    )
-    event_count_7d = int(
-        session.scalar(
-            select(func.count()).select_from(ProductEvent).where(
-                ProductEvent.event_time >= cutoff_7d
-            )
-        )
-        or 0
-    )
-    event_count_30d = int(
-        session.scalar(
-            select(func.count()).select_from(ProductEvent).where(
-                ProductEvent.event_time >= cutoff_30d
-            )
-        )
-        or 0
-    )
+    ).one()
 
     return ActiveUserMetrics(
-        active_users_7d=active_users_7d,
-        active_users_30d=active_users_30d,
-        event_count_7d=event_count_7d,
-        event_count_30d=event_count_30d,
+        active_users_7d=int(row.active_users_7d or 0),
+        active_users_30d=int(row.active_users_30d or 0),
+        event_count_7d=int(row.event_count_7d or 0),
+        event_count_30d=int(row.event_count_30d or 0),
     )
 
 

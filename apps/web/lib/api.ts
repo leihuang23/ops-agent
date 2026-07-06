@@ -247,6 +247,11 @@ export type IncidentSummary = {
   affected_account_count: number;
 };
 
+export type IncidentList = {
+  total: number;
+  incidents: IncidentSummary[];
+};
+
 export type IncidentDetail = {
   id: string;
   title: string;
@@ -288,7 +293,7 @@ export type AccountListResult =
   | { ok: false; error: string };
 
 export type IncidentListResult =
-  | { ok: true; data: IncidentSummary[] }
+  | { ok: true; data: IncidentList }
   | { ok: false; error: string };
 
 export type CreateIncidentFromAnomalyResult =
@@ -680,9 +685,20 @@ export async function createIncidentFromAnomaly(
   }
 }
 
-export async function listIncidents(): Promise<IncidentListResult> {
+export async function listIncidents(
+  options: { limit?: number; offset?: number } = {},
+): Promise<IncidentListResult> {
   try {
-    const response = await fetch(`${resolveApiBaseUrl()}/incidents`, {
+    const params = new URLSearchParams();
+    if (options.limit !== undefined) {
+      params.set('limit', String(options.limit));
+    }
+    if (options.offset !== undefined) {
+      params.set('offset', String(options.offset));
+    }
+    const query = params.toString();
+    const url = `${resolveApiBaseUrl()}/incidents${query ? `?${query}` : ''}`;
+    const response = await fetch(url, {
       cache: 'no-store',
     });
 
@@ -695,7 +711,7 @@ export async function listIncidents(): Promise<IncidentListResult> {
 
     return {
       ok: true,
-      data: (await response.json()) as IncidentSummary[],
+      data: (await response.json()) as IncidentList,
     };
   } catch (error) {
     return {
