@@ -15,19 +15,20 @@ from sqlalchemy.orm import Session
 from app.agent.persistence import utcnow_naive
 from app.agent.schemas import AgentRunDetail
 from app.agent.service import start_investigation_run
+from app.celery_app import CELERY_TASK_TIME_LIMIT
 from app.db.session import SessionLocal
 from app.evals.schemas import EvalResultsReport, EvalResultRead, EvalRunSummary
 from app.models import AgentRun, EvalCase, EvalResult
 
 PASSING_SCENARIO_THRESHOLD = 4
-# Celery hard time limit is 600s (see app.celery_app). A partial eval run whose
-# newest result is older than this threshold is treated as a dead worker (hard
-# kill, crash, OOM) rather than an in-flight suite, so build_eval_run_summary
-# self-heals it to a terminal "failed" status instead of reporting "running"
-# forever. The buffer beyond 600s covers result-commit latency and clock skew;
-# a task-level ``except`` cannot recover from a hard kill, so the read path
-# must self-heal -- mirroring the agent-run orphan reaper for eval runs.
-EVAL_RUN_STALE_AFTER = timedelta(seconds=900)
+# A partial eval run whose newest result is older than this threshold is treated
+# as a dead worker (hard kill, crash, OOM) rather than an in-flight suite, so
+# build_eval_run_summary self-heals it to a terminal "failed" status instead of
+# reporting "running" forever. The 300s buffer beyond CELERY_TASK_TIME_LIMIT
+# covers result-commit latency and clock skew; a task-level ``except`` cannot
+# recover from a hard kill, so the read path must self-heal -- mirroring the
+# agent-run orphan reaper for eval runs.
+EVAL_RUN_STALE_AFTER = timedelta(seconds=CELERY_TASK_TIME_LIMIT + 300)
 EXPECTED_REPORT_ACTION_TYPES = {
     "draft_slack_message",
     "draft_customer_email",
