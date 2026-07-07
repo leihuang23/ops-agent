@@ -345,3 +345,143 @@ def test_eval_suite_persists_failed_result_when_one_case_raises(
         assert failed_run is not None
         assert failed_run.status == "failed"
         assert "simulated investigation failure" in (failed_run.error or "")
+
+
+def test_build_eval_run_summary_marks_stale_partial_run_as_failed(
+    session_factory: Callable[[], Session],
+) -> None:
+    """A partial eval run whose newest result is older than the staleness
+    threshold must report 'failed', not 'running' forever.
+
+    Covers the case where the Celery worker is hard-killed mid-suite (hard time
+    limit, crash, OOM) and cannot append more results or run task-level cleanup.
+    A task-level ``except`` cannot recover from a hard kill, so the summary must
+    self-heal on read -- mirroring the agent-run orphan reaper for eval runs.
+    """
+    from app.agent.persistence import utcnow_naive
+    from app.evals.runner import (
+        EVAL_RUN_STALE_AFTER,
+        _build_failed_eval_result,
+        _record_failed_agent_run,
+        build_eval_run_summary,
+    )
+
+    stale_at = utcnow_naive() - EVAL_RUN_STALE_AFTER - timedelta(seconds=60)
+    eval_run_id = "evalrun_stale_partial"
+    with session_factory() as session:
+        reseed_database(session)
+        cases = session.scalars(select(EvalCase).order_by(EvalCase.id)).all()
+        # Persist results for only the first 3 of 6 cases, backdated past the
+        # staleness threshold, simulating a worker that died mid-suite.
+        for case in cases[:3]:
+            failed_run = _record_failed_agent_run(
+                session,
+                incident_id=case.incident_id,
+                error="simulated worker hard kill",
+                started_at=stale_at,
+                completed_at=stale_at,
+            )
+            session.flush()
+            result = _build_failed_eval_result(
+                eval_run_id=eval_run_id,
+                case=case,
+                failed_run=failed_run,
+                error="simulated worker hard kill",
+                latency_ms=0,
+                started_at=stale_at,
+                completed_at=stale_at,
+            )
+            result.created_at = stale_at
+            session.add(result)
+        session.commit()
+
+        summary = build_eval_run_summary(session, eval_run_id)
+
+    assert summary is not None
+    assert summary.status == "failed"
+    assert summary.total_scenarios == 3
+    assert summary.completed_at is not None
+
+
+def test_build_eval_run_summary_reports_running_for_fresh_partial_run(
+    session_factory: Callable[[], Session],
+) -> None:
+    """A partial eval run with recent results is still in flight and must
+    report 'running'. Regression guard so the staleness self-heal does not
+    prematurely terminate a live suite."""
+    from app.agent.persistence import utcnow_naive
+    from app.evals.runner import (
+        _build_failed_eval_result,
+        _record_failed_agent_run,
+        build_eval_run_summary,
+    )
+
+    fresh_at = utcnow_naive()
+    eval_run_id = "evalrun_fresh_partial"
+    with session_factory() as session:
+        reseed_database(session)
+        cases = session.scalars(select(EvalCase).order_by(EvalCase.id)).all()
+        for case in cases[:3]:
+            failed_run = _record_failed_agent_run(
+                session,
+                incident_id=case.incident_id,
+                error="still in flight",
+                started_at=fresh_at,
+                completed_at=fresh_at,
+            )
+            session.flush()
+            result = _build_failed_eval_result(
+                eval_run_id=eval_run_id,
+                case=case,
+                failed_run=failed_run,
+                error="still in flight",
+                latency_ms=0,
+                started_at=fresh_at,
+                completed_at=fresh_at,
+            )
+            session.add(result)
+        session.commit()
+
+        summary = build_eval_run_summary(session, eval_run_id)
+
+    assert summary is not None
+    assert summary.status == "running"
+    assert summary.completed_at is None
+
+
+def test_build_eval_run_summary_complete_run_takes_precedence_over_stale(
+    session_factory: Callable[[], Session],
+) -> None:
+    """A complete run (all expected results) whose newest result is older than
+    the staleness threshold must still report its real passed/failed status --
+    not be flipped to stale-failed. Pins the load-bearing branch ordering so a
+    future refactor cannot silently corrupt historical eval results."""
+    from app.agent.persistence import utcnow_naive
+    from app.evals.runner import (
+        EVAL_RUN_STALE_AFTER,
+        build_eval_run_summary,
+    )
+
+    with session_factory() as session:
+        reseed_database(session)
+        summary = run_eval_suite(session)
+        eval_run_id = summary.eval_run_id
+
+        # Backdate every result past the staleness threshold. A complete run
+        # must ignore staleness and report its real terminal status.
+        stale_at = utcnow_naive() - EVAL_RUN_STALE_AFTER - timedelta(seconds=60)
+        results = session.scalars(
+            select(EvalResult).where(EvalResult.eval_run_id == eval_run_id)
+        ).all()
+        assert len(results) == 6
+        for result in results:
+            result.created_at = stale_at
+        session.commit()
+
+        reloaded = build_eval_run_summary(session, eval_run_id)
+
+    assert reloaded is not None
+    # A complete run reports its real status regardless of age.
+    assert reloaded.status in {"passed", "failed"}
+    assert reloaded.completed_at is not None
+    assert reloaded.total_scenarios == 6

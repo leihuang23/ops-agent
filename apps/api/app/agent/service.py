@@ -453,6 +453,39 @@ def abandon_orphaned_active_runs(session: Session) -> int:
     return abandoned_count
 
 
+def mark_run_failed_on_timeout(
+    session: Session, run_id: str, *, reason: str
+) -> None:
+    """Mark an in-flight agent run failed when its Celery task is timed out.
+
+    The orphan reaper would eventually flip stale runs to failed, but doing it
+    here records a specific timeout reason immediately instead of waiting up to
+    ``ACTIVE_RUN_STALE_AFTER``. Uses a conditional update so a run that already
+    reached a terminal state (e.g. succeeded just before the limit fired) is
+    not overwritten.
+    """
+    now = utcnow_naive()
+    claim = session.execute(
+        update(AgentRun)
+        .where(AgentRun.id == run_id, AgentRun.status.in_(ACTIVE_RUN_STATUSES))
+        .values(
+            status="failed",
+            error=reason,
+            completed_at=now,
+            updated_at=now,
+        )
+    )
+    if claim.rowcount == 1:
+        session.commit()
+        _invalidate_run_detail_cache(run_id)
+        logger.warning(
+            "Agent run marked failed on celery timeout",
+            extra={"run_id": run_id, "reason": reason},
+        )
+    else:
+        session.rollback()
+
+
 def _abandon_orphaned_run(session: Session, run: AgentRun) -> None:
     now = utcnow_naive()
     if not _run_is_stale(session, run, now=now):
