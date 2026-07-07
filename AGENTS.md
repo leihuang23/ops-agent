@@ -18,7 +18,7 @@ The third risk is unrealistic seed data. If scenarios are too obvious or linear,
 - Keep the first version focused on the primary investigation loop: anomaly -> evidence gathering -> root cause -> affected accounts -> recommended actions -> approval-gated drafts.
 - Every important claim in the UI, API, final report, and eval output must be backed by cited SQL results, tickets, documents, or incident records.
 - Never let the agent perform irreversible or external write actions without explicit approval. In the first version, all Slack, email, CRM, and task actions must be mocks.
-- Demo mutations (`POST /incidents`, `POST /agent/investigations`, `POST /approvals/{id}/approve|reject`, `POST /mock-actions`, `POST /evals/run`) are gated by `DEMO_OPERATOR_TOKEN` when `APP_ENV=demo`. Local/test/development environments can run without the token, but never disable the gate for a publicly accessible demo.
+- Demo mutations are token-gated when `APP_ENV=demo`: `POST /incidents`, `POST /agent/investigations`, `POST /approvals/{id}/approve|reject`, and `POST /mock-actions` require `DEMO_OPERATOR_TOKEN`; `POST /evals/run` requires `EVAL_RUN_TOKEN`; `POST /documents/ingest` requires `DOCUMENT_INGEST_TOKEN`. Each gate uses `secrets.compare_digest` and fails closed when its token is unset in the `demo` env. Local/test/development environments can run without the tokens, but never disable the gates for a publicly accessible demo.
 - Treat seeded scenarios and eval cases as product-critical assets, not test fixtures of convenience.
 - Prefer deterministic analytics and explicit tool results before LLM summarization. The LLM should synthesize evidence, not invent the evidence.
 - Do not introduce real customer data or real third-party integrations unless the PRD is explicitly updated to allow them.
@@ -45,7 +45,7 @@ If implementation effort grows, cut optional infrastructure before cutting evide
 - Keep provider abstraction minimal until there is real pressure to support multiple LLM providers.
 - Do not add dependencies only because they are listed in the PRD. Add each dependency when a real implementation need appears.
 - The current backend is organized by domain under `apps/api/app/`: `accounts`, `agent`, `approvals`, `core`, `db`, `evals`, `health`, `incidents`, `knowledge`, `llm`, `metrics`, and `support`. The Next.js frontend under `apps/web/app/` mirrors the operational surfaces: dashboard, incidents, agent runs, approvals, accounts, support tickets, knowledge search, and evals.
-- The PRD lists LangGraph as the recommended orchestrator. The MVP uses a fixed linear investigation DAG implemented directly in `apps/api/app/agent/workflow.py`. Do not introduce LangGraph unless a real feature requires dynamic branching; keep the orchestration simple and auditable.
+- The PRD lists LangGraph as the recommended orchestrator. The MVP uses a fixed linear investigation DAG built with LangGraph's `StateGraph` in `apps/api/app/agent/workflow.py` (compiled once at startup, no dynamic branching). Do not add dynamic branching or loops to the graph unless a real feature requires it; keep the orchestration simple and auditable.
 
 ## Data And Scenario Rules
 

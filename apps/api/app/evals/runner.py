@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from time import perf_counter
 from typing import Any, Literal
 from uuid import uuid4
@@ -20,6 +20,14 @@ from app.evals.schemas import EvalResultsReport, EvalResultRead, EvalRunSummary
 from app.models import AgentRun, EvalCase, EvalResult
 
 PASSING_SCENARIO_THRESHOLD = 4
+# Celery hard time limit is 600s (see app.celery_app). A partial eval run whose
+# newest result is older than this threshold is treated as a dead worker (hard
+# kill, crash, OOM) rather than an in-flight suite, so build_eval_run_summary
+# self-heals it to a terminal "failed" status instead of reporting "running"
+# forever. The buffer beyond 600s covers result-commit latency and clock skew;
+# a task-level ``except`` cannot recover from a hard kill, so the read path
+# must self-heal -- mirroring the agent-run orphan reaper for eval runs.
+EVAL_RUN_STALE_AFTER = timedelta(seconds=900)
 EXPECTED_REPORT_ACTION_TYPES = {
     "draft_slack_message",
     "draft_customer_email",
@@ -194,15 +202,26 @@ def build_eval_run_summary(
     is_complete = (
         expected_case_count > 0 and len(result_reads) >= expected_case_count
     )
-    completed_at = (
-        max(result.completed_at for result in results) if is_complete else None
-    )
-    if not is_complete:
-        status: Literal["passed", "failed", "running"] = "running"
-    elif passed_scenarios >= PASSING_SCENARIO_THRESHOLD:
-        status = "passed"
-    else:
+    newest_created = max(result.created_at for result in results)
+    # A partial run is "running" only while the Celery worker may still be
+    # alive. Once the newest result is older than EVAL_RUN_STALE_AFTER, the
+    # worker was killed (hard time limit, crash, OOM) and cannot append more
+    # results or run task-level cleanup. Flip the partial run to a terminal
+    # "failed" status so it does not report "running" forever.
+    is_stale = utcnow_naive() - newest_created > EVAL_RUN_STALE_AFTER
+    if is_complete:
+        completed_at: datetime | None = max(
+            result.completed_at for result in results
+        )
+        status: Literal["passed", "failed", "running"] = (
+            "passed" if passed_scenarios >= PASSING_SCENARIO_THRESHOLD else "failed"
+        )
+    elif is_stale:
+        completed_at = max(result.completed_at for result in results)
         status = "failed"
+    else:
+        completed_at = None
+        status = "running"
     return EvalRunSummary(
         eval_run_id=eval_run_id,
         status=status,

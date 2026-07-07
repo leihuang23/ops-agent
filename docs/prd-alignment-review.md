@@ -9,6 +9,16 @@
 > marked with **(FIXED)** below; see the relevant code sections for the
 > implementation. The remaining open items are operational hardening or
 > out-of-scope production concerns.
+>
+> **Superseded by `prd-alignment-review-2026-07-07.md`.** A re-verification on
+> 2026-07-07 confirmed the fixes below and corrected four entries that had gone
+> stale: the composite-index and duplicate-metric-query items are now FIXED
+> (migration `20260706_0009` + `metrics/service.py:144-146`), and the `/ready`
+> failure-mode and real-route rate-limit test gaps are now CLOSED
+> (`test_health.py:32-130`, `test_rate_limiting.py:74-125`). The 2026-07-07
+> review also added a P1 eval-run liveness fix (`SoftTimeLimitExceeded`
+> handling + a staleness self-heal in `build_eval_run_summary`). Read the newer
+> review for the current state.
 
 ---
 
@@ -104,16 +114,16 @@ Indexing and SQL aggregation discipline are **solid**; pgvector HNSW is correctl
 | 1 | `Cache()` per-call `ping()`, no singleton, no stampede protection | **FIXED** — module-level singleton with fallback | [cache.py:22-56](file:///Users/leihuang/workspace/ops-agent/apps/api/app/cache.py) |
 | 2 | No Celery `task_time_limit`/concurrency config | **FIXED** — 600s hard / 540s soft limits | [celery_app.py:24-27](file:///Users/leihuang/workspace/ops-agent/apps/api/app/celery_app.py) |
 | 3 | Eval suite runs synchronously inside the HTTP request | **FIXED** — `POST /evals/run` returns 202 and enqueues `run_eval_suite_task` via Celery | [evals/router.py:48-82](file:///Users/leihuang/workspace/ops-agent/apps/api/app/evals/router.py); [evals/tasks.py](file:///Users/leihuang/workspace/ops-agent/apps/api/app/evals/tasks.py) |
-| 4 | Duplicate `unresolved_count` query identical to `failed_count` | SUBOPTIMAL | [metrics/service.py:119-145](file:///Users/leihuang/workspace/ops-agent/apps/api/app/metrics/service.py) |
+| 4 | Duplicate `unresolved_count` query identical to `failed_count` | **FIXED** — duplicate removed, field retained for API compatibility | [metrics/service.py:144-146](file:///Users/leihuang/workspace/ops-agent/apps/api/app/metrics/service.py) |
 | 5 | Multiple scalar queries foldable into one conditional aggregation | SUBOPTIMAL | [metrics/service.py:33-57,76-101,234-265](file:///Users/leihuang/workspace/ops-agent/apps/api/app/metrics/service.py) |
 | 6 | `list_incidents` loads all incidents, no pagination | **FIXED** — `GET /incidents` supports `limit`/`offset` | [incidents/router.py:23-30](file:///Users/leihuang/workspace/ops-agent/apps/api/app/incidents/router.py) |
-| 7 | Missing composite `(status, invoice_date)` / `(status, canceled_at)` indexes for hot dashboard filters | ADEQUATE-gap | migrations + [metrics/service.py:121-145](file:///Users/leihuang/workspace/ops-agent/apps/api/app/metrics/service.py) |
-| 8 | `AgentRunRecorder` commits after every step (~14 commits/run) | SUBOPTIMAL | [persistence.py:81,109,119](file:///Users/leihuang/workspace/ops-agent/apps/api/app/agent/persistence.py) |
+| 7 | Missing composite `(status, invoice_date)` / `(status, canceled_at)` indexes for hot dashboard filters | **FIXED** — migration `20260706_0009` adds both composite indexes | [alembic/versions/20260706_0009_add_hot_path_indexes.py](file:///Users/leihuang/workspace/ops-agent/apps/api/alembic/versions/20260706_0009_add_hot_path_indexes.py); [metrics/service.py:121-145](file:///Users/leihuang/workspace/ops-agent/apps/api/app/metrics/service.py) |
+| 8 | `AgentRunRecorder` commits after every step (~14 commits/run) | **FIXED** — `_maybe_commit` batches commits via `_COMMIT_EVERY` threshold (failures still commit immediately for visibility) | [persistence.py:117-133](file:///Users/leihuang/workspace/ops-agent/apps/api/app/agent/persistence.py) |
 | 9 | Eval cases run sequentially, not in parallel | SUBOPTIMAL | [runner.py:56](file:///Users/leihuang/workspace/ops-agent/apps/api/app/evals/runner.py) |
 | 10 | OpenAI embeddings batched per-document, not per-corpus | ADEQUATE-gap | [ingestion.py:231-232,401](file:///Users/leihuang/workspace/ops-agent/apps/api/app/knowledge/ingestion.py) |
 | 11 | No explicit `max_steps` cap (safe today only because graph is linear) | ADEQUATE-gap | [workflow.py:218-224](file:///Users/leihuang/workspace/ops-agent/apps/api/app/agent/workflow.py) |
 
-None of these are critical at demo data volume. The most worthwhile remaining fixes are #8 (batch step commits) and SQL consolidation in `metrics/service.py`.
+None of these are critical at demo data volume. The most worthwhile remaining fix is SQL consolidation in `metrics/service.py` (#5 — folding the scalar queries into one conditional aggregation).
 
 ---
 
@@ -173,8 +183,8 @@ Framing: per AGENTS.md/prd.md this is a **demo-shaped portfolio app** whose depl
 
 ### Test coverage gaps (PRD-relevant)
 
-- `/ready` endpoint failure modes (Postgres down, Redis down) not unit-tested.
-- Rate limiting tested on a synthetic app, not on real decorated routes.
+- `/ready` endpoint failure modes (Postgres down, Redis down) — **CLOSED**: `test_health.py:32-130` covers DB-down, Redis-down, Redis-`from_url`-failure, and both-down cases, asserting 503 + generic error status (no raw exception leakage).
+- Rate limiting tested on a synthetic app, not on real decorated routes — **CLOSED**: `test_rate_limiting.py:74-125` exercises the real `POST /approvals/{id}/approve` route with a temporarily-lowered limit and asserts the Phase 2 structured error envelope on 429.
 - Celery worker path (`investigate_incident.delay`) only exercised by docker-smoke CI, not a unit test.
 - No end-to-end test that `OBSERVABILITY_FULL_PAYLOADS=false` actually withholds evidence from a hosted provider (summarization logic tested in isolation only).
 
@@ -196,9 +206,9 @@ Ranked by impact on PRD success criteria and reviewer trust:
 | ~~P2~~ | ~~Seed one "unknown-root-cause" eval scenario~~ | ~~Feature completeness~~ | ~~Medium~~ | **FIXED** |
 | ~~P2~~ | ~~Global `:focus-visible` style + skip link + `aria-current`~~ | ~~UX~~ | ~~Small~~ | **FIXED** |
 | ~~P2~~ | ~~Cross-link accounts/tickets in run + incident pages; add Support to nav~~ | ~~UX~~ | ~~Small~~ | **FIXED** |
-| P3 | Composite indexes for `(status, invoice_date)` / `(status, canceled_at)` | Performance | Small | Open |
-| P3 | Consolidate duplicate/scalar metric queries | Performance | Small | Open |
-| P3 | Add `/ready` failure-mode tests and real-route rate-limit tests | Tests | Small | Open |
+| ~~P3~~ | ~~Composite indexes for `(status, invoice_date)` / `(status, canceled_at)`~~ | ~~Performance~~ | ~~Small~~ | **FIXED** (migration `20260706_0009`) |
+| P3 | Consolidate duplicate/scalar metric queries | Performance | Small | Partial — duplicate removed (`metrics/service.py:144-146`); scalar consolidation still open |
+| ~~P3~~ | ~~Add `/ready` failure-mode tests and real-route rate-limit tests~~ | ~~Tests~~ | ~~Small~~ | **CLOSED** (`test_health.py:32-130`, `test_rate_limiting.py:74-125`) |
 | P3 | Add Prometheus/ops metrics and token/cost aggregation | Observability | Medium | Open / out of PRD scope |
 
 ---
@@ -209,6 +219,6 @@ Ranked by impact on PRD success criteria and reviewer trust:
 
 **Is it production-ready?** For its **intended demo/reviewer scope: yes.** The P0/P1 stability and observability gaps identified in the audit have been fixed. Documentation and tests are production-grade. Security is appropriately fail-closed for a demo. The remaining open items are lower-impact performance polish or out of PRD scope.
 
-**What would block a real multi-tenant production deploy (out of PRD scope)?** Real authentication, hardened rate-limit defaults, CSP/security headers, Prometheus metrics + token/cost aggregation, alerting, and composite indexes for the hottest dashboard filters.
+**What would block a real multi-tenant production deploy (out of PRD scope)?** Real authentication, hardened rate-limit defaults, CSP/security headers, Prometheus metrics + token/cost aggregation, alerting, and scalar SQL consolidation in the metrics service.
 
 **The two fixes that originally most protected the PRD's claims** — the double-approval race and the eval-suite crash-on-single-failure — are now implemented. Current attention should shift to reviewer UX evidence (run the eval suite, inspect a run trace, exercise approve/reject) and the small open P3 items above.
