@@ -378,6 +378,7 @@ def test_investigation_workflow_withholds_evidence_payloads_from_hosted_trace(
 
     import app.models  # noqa: F401
     from app.agent.workflow import run_investigation_workflow
+    from app.agents.service import DEFAULT_AGENT_ID, DEFAULT_AGENT_VERSION_ID
     from app.db.base import Base
     from app.llm import NoopLLMClient
     from app.models import AgentRun, Incident
@@ -410,6 +411,8 @@ def test_investigation_workflow_withholds_evidence_payloads_from_hosted_trace(
         run = AgentRun(
             id=f"run_{uuid4().hex[:16]}",
             incident_id=incident.id,
+            agent_id=DEFAULT_AGENT_ID,
+            agent_version_id=DEFAULT_AGENT_VERSION_ID,
             status="running",
             trace_id=None,
             trace_url=None,

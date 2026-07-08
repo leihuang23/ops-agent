@@ -20,6 +20,9 @@ PRICING_TABLE: dict[str, ModelPricing] = {
     "claude-3-5-sonnet-latest": ModelPricing(
         input_price_per_1m_tokens=3.00, output_price_per_1m_tokens=15.00
     ),
+    "claude-3-haiku-20240307": ModelPricing(
+        input_price_per_1m_tokens=0.25, output_price_per_1m_tokens=1.25
+    ),
     "claude-3-opus-latest": ModelPricing(
         input_price_per_1m_tokens=15.00, output_price_per_1m_tokens=75.00
     ),

@@ -256,6 +256,12 @@ class AgentRun(Base):
     incident_id: Mapped[str] = mapped_column(
         String(64), ForeignKey("incidents.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    agent_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("agents.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    agent_version_id: Mapped[str] = mapped_column(
+        String(128), ForeignKey("agent_versions.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     trace_id: Mapped[str | None] = mapped_column(String(96), index=True)
     trace_url: Mapped[str | None] = mapped_column(String(512))
@@ -274,6 +280,8 @@ class AgentRun(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
     incident: Mapped[Incident] = relationship(back_populates="agent_runs")
+    agent: Mapped[Agent] = relationship(back_populates="runs")
+    agent_version: Mapped[AgentVersion] = relationship(back_populates="runs")
     steps: Mapped[list[AgentRunStep]] = relationship(
         back_populates="run", cascade="all, delete-orphan", order_by="AgentRunStep.sequence"
     )
@@ -482,6 +490,7 @@ class Agent(Base):
         cascade="all, delete-orphan",
         order_by="AgentVersion.version_number",
     )
+    runs: Mapped[list[AgentRun]] = relationship(back_populates="agent")
 
 
 class AgentVersion(Base):
@@ -522,6 +531,7 @@ class AgentVersion(Base):
     forked_from: Mapped["AgentVersion | None"] = relationship(
         "AgentVersion", remote_side="AgentVersion.id"
     )
+    runs: Mapped[list[AgentRun]] = relationship(back_populates="agent_version")
 
 
 Index("ix_invoices_account_date", Invoice.account_id, Invoice.invoice_date)

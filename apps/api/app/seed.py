@@ -8,7 +8,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Final
 from urllib.parse import urlparse
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -711,15 +711,18 @@ def build_eval_cases() -> list[EvalCase]:
 
 
 def _seed_control_plane_agent(session: Session) -> None:
+    from app.agent.tools import TOOL_IDS
     from app.llm.prompts import INVESTIGATION_SYSTEM_PROMPT
 
     agent_id = "revenue-ops-agent"
+    version_id = f"{agent_id}_v1"
     existing_agent = session.get(Agent, agent_id)
     if existing_agent is not None:
         has_published = any(
             v.status == "published" for v in existing_agent.versions
         )
         if has_published:
+            _backfill_agent_run_versions(session, agent_id, version_id)
             return
 
     now = datetime.now(UTC).replace(tzinfo=None)
@@ -742,19 +745,19 @@ def _seed_control_plane_agent(session: Session) -> None:
     else:
         agent = existing_agent
 
-    existing_v1 = session.get(AgentVersion, f"{agent_id}_v1")
+    existing_v1 = session.get(AgentVersion, version_id)
     if existing_v1 is None:
         v1 = AgentVersion(
-            id=f"{agent_id}_v1",
+            id=version_id,
             agent_id=agent_id,
             version_number=1,
             semantic_version="1.0.0",
             status="published",
-            system_prompt=INVESTIGATION_SYSTEM_PROMPT,
+            system_prompt="",
             model=agent.default_model,
             temperature=0.1,
             max_tokens=1024,
-            enabled_tool_ids=[],
+            enabled_tool_ids=list(TOOL_IDS),
             allowed_scopes=[],
             published_at=now,
             published_by="bootstrap",
@@ -764,6 +767,36 @@ def _seed_control_plane_agent(session: Session) -> None:
         )
         session.add(v1)
         agent.updated_at = now
+    else:
+        existing_v1.status = "published"
+        if existing_v1.published_at is None:
+            existing_v1.published_at = now
+        if existing_v1.enabled_tool_ids is None or len(existing_v1.enabled_tool_ids) == 0:
+            existing_v1.enabled_tool_ids = list(TOOL_IDS)
+        if existing_v1.model is None or len(existing_v1.model) == 0:
+            existing_v1.model = agent.default_model
+        if existing_v1.temperature is None:
+            existing_v1.temperature = 0.1
+        if existing_v1.max_tokens is None:
+            existing_v1.max_tokens = 1024
+        if existing_v1.system_prompt == INVESTIGATION_SYSTEM_PROMPT:
+            existing_v1.system_prompt = ""
+        existing_v1.updated_at = now
+        agent.updated_at = now
+
+    _backfill_agent_run_versions(session, agent_id, version_id)
+
+
+def _backfill_agent_run_versions(
+    session: Session, agent_id: str, agent_version_id: str
+) -> None:
+    session.execute(
+        update(AgentRun)
+        .where(
+            (AgentRun.agent_id.is_(None))
+            | ((AgentRun.agent_id == agent_id) & (AgentRun.agent_version_id.is_(None)))
+        ).values(agent_id=agent_id, agent_version_id=agent_version_id)
+    )
 
 
 def scenario_affected_accounts(

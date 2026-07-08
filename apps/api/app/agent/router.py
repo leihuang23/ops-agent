@@ -45,7 +45,11 @@ def start_investigation(
     try:
         if payload.run_inline:
             run, created = start_investigation_run(
-                db, payload.incident_id, force=payload.force
+                db,
+                payload.incident_id,
+                force=payload.force,
+                idempotency_key=payload.idempotency_key,
+                agent_version_id=payload.agent_version_id,
             )
         else:
             run, created = create_investigation_run(
@@ -53,6 +57,7 @@ def start_investigation(
                 payload.incident_id,
                 force=payload.force,
                 idempotency_key=payload.idempotency_key,
+                agent_version_id=payload.agent_version_id,
             )
             if created:
                 _enqueue_investigation(run.id)

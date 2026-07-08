@@ -4,10 +4,13 @@ import { redirect } from 'next/navigation';
 
 import {
   approveApprovalRequest,
+  createAgentVersion,
   createIncidentFromAnomaly,
+  publishAgentVersion as apiPublishAgentVersion,
   rejectApprovalRequest,
   runEvalSuite,
   startInvestigation,
+  updateAgentVersion,
 } from '@/lib/api';
 
 export async function openIncidentFromAnomaly(formData: FormData) {
@@ -25,16 +28,18 @@ export async function openIncidentFromAnomaly(formData: FormData) {
 }
 
 export async function startInvestigationFromIncident(formData: FormData) {
-  const incidentId = formData.get('incident_id');
-  if (typeof incidentId !== 'string' || incidentId.length === 0) {
-    throw new Error('Missing incident id');
-  }
+  const incidentId = readRequiredFormValue(formData, 'incident_id');
+  const agentVersionId = formData.get('agent_version_id');
 
   const encodedIncidentId = encodeURIComponent(incidentId);
-  const run = await startInvestigation(incidentId, {
+  const options: { runInline: boolean; demoOperatorToken?: string; agentVersionId?: string } = {
     runInline: true,
     ...demoOperatorOptions(),
-  });
+  };
+  if (typeof agentVersionId === 'string' && agentVersionId.length > 0) {
+    options.agentVersionId = agentVersionId;
+  }
+  const run = await startInvestigation(incidentId, options);
   if (!run.ok) {
     redirect(`/incidents/${encodedIncidentId}?investigation_error=${encodeURIComponent(run.error)}`);
   }
@@ -94,9 +99,6 @@ export async function runEvalSuiteFromReport() {
     redirect(`/evals?eval_error=${encodeURIComponent(result.error)}`);
   }
 
-  // When the backend returns 202 the suite is running asynchronously via
-  // Celery. Redirect with a status hint so the evals page can show the
-  // user that results will appear shortly.
   if (result.data.status === 'running') {
     redirect(
       `/evals?eval_notice=${encodeURIComponent(
@@ -106,6 +108,92 @@ export async function runEvalSuiteFromReport() {
   }
 
   redirect('/evals');
+}
+
+export async function saveAgentVersionDraft(formData: FormData) {
+  const agentId = readRequiredFormValue(formData, 'agent_id');
+  const versionId = formData.get('version_id');
+  const baseVersionId = formData.get('base_version_id');
+  const systemPrompt = formData.get('system_prompt');
+  const model = formData.get('model');
+  const temperatureRaw = formData.get('temperature');
+  const maxTokensRaw = formData.get('max_tokens');
+  const toolsPresent = formData.get('enabled_tool_ids_present');
+  const returnTo = formData.get('return_to');
+
+  const returnPath =
+    typeof returnTo === 'string' && returnTo.startsWith('/') && !returnTo.startsWith('//')
+      ? returnTo
+      : `/agents/${encodeURIComponent(agentId)}`;
+  const enabledToolIds: string[] =
+    toolsPresent === '1'
+      ? formData.getAll('enabled_tool_ids').filter((v): v is string => typeof v === 'string')
+      : [];
+  const shouldSetEnabledTools = toolsPresent === '1';
+
+  let temperature: number | undefined;
+  if (typeof temperatureRaw === 'string' && temperatureRaw.length > 0) {
+    temperature = Number(temperatureRaw);
+    if (Number.isNaN(temperature)) {
+      redirect(`${returnPath}?version_error=${encodeURIComponent('Invalid temperature value')}`);
+    }
+  }
+
+  let maxTokens: number | undefined;
+  if (typeof maxTokensRaw === 'string' && maxTokensRaw.length > 0) {
+    maxTokens = Number(maxTokensRaw);
+    if (Number.isNaN(maxTokens) || maxTokens <= 0) {
+      redirect(`${returnPath}?version_error=${encodeURIComponent('Invalid max tokens value')}`);
+    }
+  }
+
+  const versionInput = {
+    system_prompt: typeof systemPrompt === 'string' && systemPrompt.length > 0 ? systemPrompt : undefined,
+    model: typeof model === 'string' && model.length > 0 ? model : undefined,
+    temperature,
+    max_tokens: maxTokens,
+    enabled_tool_ids: shouldSetEnabledTools ? enabledToolIds : undefined,
+  };
+
+  let result;
+  if (typeof versionId === 'string' && versionId.length > 0) {
+    result = await updateAgentVersion(agentId, versionId, versionInput, demoOperatorOptions());
+  } else {
+    result = await createAgentVersion(
+      agentId,
+      {
+        fork_from_version_id:
+          typeof baseVersionId === 'string' && baseVersionId.length > 0 ? baseVersionId : undefined,
+        ...versionInput,
+      },
+      demoOperatorOptions(),
+    );
+  }
+
+  if (!result.ok) {
+    redirect(`${returnPath}?version_error=${encodeURIComponent(result.error)}`);
+  }
+
+  if (result.data.version_number === null) {
+    redirect(`/agents/${encodeURIComponent(agentId)}/versions/${encodeURIComponent(result.data.id)}?draft_saved=1`);
+  }
+
+  redirect(returnPath);
+}
+
+export async function publishAgentVersion(formData: FormData) {
+  const versionId = readRequiredFormValue(formData, 'version_id');
+  const agentId = readRequiredFormValue(formData, 'agent_id');
+
+  const result = await apiPublishAgentVersion(agentId, versionId, demoOperatorOptions());
+
+  if (!result.ok) {
+    redirect(
+      `/agents/${encodeURIComponent(agentId)}/versions/${encodeURIComponent(versionId)}?publish_error=${encodeURIComponent(result.error)}`,
+    );
+  }
+
+  redirect(`/agents/${encodeURIComponent(agentId)}?version_published=${encodeURIComponent(versionId)}`);
 }
 
 function readRequiredFormValue(formData: FormData, key: string) {

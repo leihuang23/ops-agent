@@ -71,7 +71,7 @@ def test_build_limiter_falls_back_to_memory_when_redis_is_unavailable(
     assert limiter._storage.__class__.__name__ == "MemoryStorage"
 
 
-def test_real_mutation_route_enforces_rate_limit_with_structured_envelope() -> None:
+def test_real_mutation_route_enforces_rate_limit_with_structured_envelope(monkeypatch) -> None:
     """Real decorated mutation routes must enforce limits and return the Phase 2
     structured error envelope (not a bare ``{"detail": ...}`` body) on 429.
 
@@ -102,6 +102,10 @@ def test_real_mutation_route_enforces_rate_limit_with_structured_envelope() -> N
     fresh_storage = MemoryStorage("memory://")
     limiter._route_limits[route_name] = test_limits
     limiter._storage = fresh_storage
+    monkeypatch.setattr(
+        "app.approvals.router.approve_request",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(LookupError("not found")),
+    )
 
     try:
         client = TestClient(create_app())

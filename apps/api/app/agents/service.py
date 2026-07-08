@@ -30,6 +30,46 @@ class ImmutableVersionError(ValueError):
     pass
 
 
+class InvalidVersionConfigError(ValueError):
+    pass
+
+
+ALLOWED_MODELS: frozenset[str] = frozenset(
+    {
+        "gpt-4o-mini",
+        "gpt-4o",
+        "claude-3-5-sonnet-latest",
+        "claude-3-haiku-20240307",
+    }
+)
+DEFAULT_ENABLED_TOOL_IDS: tuple[str, ...] = (
+    "query_revenue_metrics",
+    "fetch_account_details",
+    "search_docs",
+    "fetch_support_tickets",
+)
+
+
+def _validate_version_config(
+    *,
+    model: str | None,
+    enabled_tool_ids: list[str] | None,
+) -> None:
+    from app.agent.tools import TOOL_IDS
+
+    if model is not None and model not in ALLOWED_MODELS:
+        allowed = ", ".join(sorted(ALLOWED_MODELS))
+        raise InvalidVersionConfigError(
+            f"Unsupported model: {model!r}. Allowed models: {allowed}"
+        )
+    if enabled_tool_ids is not None:
+        unknown = set(enabled_tool_ids) - set(TOOL_IDS)
+        if unknown:
+            raise InvalidVersionConfigError(
+                "Unknown tool ids: " + ", ".join(sorted(unknown))
+            )
+
+
 class DuplicateAgentError(ValueError):
     pass
 
@@ -74,6 +114,17 @@ def _version_detail(version: AgentVersion) -> VersionDetail:
     )
 
 
+def _published_version_recency_key(version: AgentVersion) -> tuple[int, int, datetime, str]:
+    version_number = version.version_number if version.version_number is not None else -1
+    published_at = version.published_at or datetime.min
+    return (
+        1 if version.version_number is not None else 0,
+        version_number,
+        published_at,
+        version.id,
+    )
+
+
 def _bulk_version_metadata(
     session: Session, agent_ids: list[str]
 ) -> dict[str, dict[str, Any]]:
@@ -92,10 +143,10 @@ def _bulk_version_metadata(
         meta = result[v.agent_id]
         meta["count"] += 1
         if v.status == "published":
-            if meta["latest_published"] is None or (
-                v.version_number is not None
-                and meta["latest_published"].version_number is not None
-                and v.version_number > meta["latest_published"].version_number
+            if (
+                meta["latest_published"] is None
+                or _published_version_recency_key(v)
+                > _published_version_recency_key(meta["latest_published"])
             ):
                 meta["latest_published"] = v
         elif v.status == "draft":
@@ -158,7 +209,8 @@ def get_agent(session: Session, agent_id: str) -> dict[str, Any] | None:
     versions = list(agent.versions)
     published = sorted(
         [v for v in versions if v.status == "published"],
-        key=lambda v: v.version_number or 0,
+        key=_published_version_recency_key,
+        reverse=True,
     )
     drafts = sorted(
         [v for v in versions if v.status == "draft"],
@@ -168,7 +220,7 @@ def get_agent(session: Session, agent_id: str) -> dict[str, Any] | None:
     ordered = published + drafts
     count = len(versions)
 
-    latest_published = published[-1] if published else None
+    latest_published = published[0] if published else None
     current_draft = drafts[0] if drafts else None
 
     return {
@@ -186,6 +238,8 @@ def get_agent(session: Session, agent_id: str) -> dict[str, Any] | None:
 
 
 def create_agent(session: Session, payload: AgentCreate) -> dict[str, Any]:
+    _validate_version_config(model=payload.default_model, enabled_tool_ids=None)
+
     now = _utcnow()
     agent = Agent(
         id=payload.id,
@@ -205,7 +259,7 @@ def create_agent(session: Session, payload: AgentCreate) -> dict[str, Any]:
         model=payload.default_model,
         temperature=0.1,
         max_tokens=1024,
-        enabled_tool_ids=[],
+        enabled_tool_ids=list(DEFAULT_ENABLED_TOOL_IDS),
         allowed_scopes=[],
         published_at=None,
         published_by=None,
@@ -261,7 +315,12 @@ def list_versions(
             AgentVersion.agent_id == agent_id,
             AgentVersion.status == "published",
         )
-        .order_by(AgentVersion.version_number)
+        .order_by(
+            AgentVersion.version_number.is_(None),
+            AgentVersion.version_number,
+            AgentVersion.published_at,
+            AgentVersion.id,
+        )
         .limit(pub_fetch_limit)
     ).all()
 
@@ -281,7 +340,7 @@ def list_versions(
                 AgentVersion.agent_id == agent_id,
                 AgentVersion.status == "draft",
             )
-            .order_by(AgentVersion.created_at.desc())
+            .order_by(AgentVersion.created_at.desc(), AgentVersion.id.desc())
             .limit(draft_fetch_limit)
         ).all()
         if current_offset < len(draft_versions):
@@ -322,7 +381,7 @@ def create_version(
     else:
         published = [v for v in agent.versions if v.status == "published"]
         if published:
-            source = max(published, key=lambda v: v.version_number or 0)
+            source = max(published, key=_published_version_recency_key)
 
     system_prompt = payload.system_prompt
     model = payload.model
@@ -355,10 +414,12 @@ def create_version(
         if max_tokens is None:
             max_tokens = 1024
         if enabled_tool_ids is None:
-            enabled_tool_ids = []
+            enabled_tool_ids = list(DEFAULT_ENABLED_TOOL_IDS)
         if allowed_scopes is None:
             allowed_scopes = []
         forked_from = None
+
+    _validate_version_config(model=model, enabled_tool_ids=enabled_tool_ids)
 
     draft_count = sum(1 for v in agent.versions if v.status == "draft")
     version_id = f"{agent_id}_draft_{draft_count + 1}_{secrets.token_hex(3)}"
@@ -397,8 +458,12 @@ def update_version(
     version_id: str,
     payload: AgentVersionUpdate,
 ) -> VersionDetail:
-    version = session.get(AgentVersion, version_id)
-    if version is None or version.agent_id != agent_id:
+    version = session.scalar(
+        select(AgentVersion)
+        .where(AgentVersion.id == version_id, AgentVersion.agent_id == agent_id)
+        .with_for_update()
+    )
+    if version is None:
         raise VersionNotFoundError(f"Unknown version: {version_id}")
     if version.status == "published":
         raise ImmutableVersionError(
@@ -406,6 +471,10 @@ def update_version(
         )
 
     now = _utcnow()
+    _validate_version_config(
+        model=payload.model,
+        enabled_tool_ids=payload.enabled_tool_ids,
+    )
     if payload.system_prompt is not None:
         version.system_prompt = payload.system_prompt
     if payload.model is not None:
@@ -439,15 +508,25 @@ def publish_version(
     version_id: str,
     published_by: str = "system",
 ) -> VersionDetail:
-    version = session.get(AgentVersion, version_id)
-    if version is None or version.agent_id != agent_id:
+    agent = session.scalar(
+        select(Agent).where(Agent.id == agent_id).with_for_update()
+    )
+    if agent is None:
+        raise AgentNotFoundError(f"Unknown agent id: {agent_id}")
+
+    version = session.scalar(
+        select(AgentVersion)
+        .where(AgentVersion.id == version_id, AgentVersion.agent_id == agent_id)
+        .with_for_update()
+    )
+    if version is None:
         raise VersionNotFoundError(f"Unknown version: {version_id}")
     if version.status == "published":
         raise ImmutableVersionError("Version is already published.")
-
-    agent = session.get(Agent, agent_id)
-    if agent is None:
-        raise AgentNotFoundError(f"Unknown agent id: {agent_id}")
+    _validate_version_config(
+        model=version.model,
+        enabled_tool_ids=list(version.enabled_tool_ids or []),
+    )
 
     now = _utcnow()
     next_number = (
@@ -480,3 +559,33 @@ def publish_version(
         ) from exc
     session.refresh(version)
     return _version_detail(version)
+
+
+DEFAULT_AGENT_ID = "revenue-ops-agent"
+DEFAULT_AGENT_VERSION_ID = "revenue-ops-agent_v1"
+
+
+def get_published_version(
+    session: Session, agent_version_id: str
+) -> AgentVersion | None:
+    version = session.get(AgentVersion, agent_version_id)
+    if version is None or version.status != "published":
+        return None
+    return version
+
+
+def get_default_published_version(session: Session) -> AgentVersion | None:
+    return session.scalar(
+        select(AgentVersion)
+        .where(
+            AgentVersion.status == "published",
+            AgentVersion.agent_id == DEFAULT_AGENT_ID,
+        )
+        .order_by(
+            AgentVersion.version_number.is_(None),
+            AgentVersion.version_number.desc(),
+            AgentVersion.published_at.desc(),
+            AgentVersion.id.desc(),
+        )
+        .limit(1)
+    )

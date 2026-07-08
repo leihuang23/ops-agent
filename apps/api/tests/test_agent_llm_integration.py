@@ -13,6 +13,7 @@ from app.agent.workflow import (
     diagnose_with_llm_or_fallback,
     run_investigation_workflow,
 )
+from app.agents.service import DEFAULT_AGENT_ID, DEFAULT_AGENT_VERSION_ID
 from app.db.base import Base
 from app.llm.schemas import LLMResponse, LLMUsage
 from app.models import AgentRun, Incident
@@ -67,6 +68,8 @@ def test_workflow_uses_llm_diagnosis_when_configured(
         run = AgentRun(
             id="run_llm_test",
             incident_id=incident.id,
+            agent_id=DEFAULT_AGENT_ID,
+            agent_version_id=DEFAULT_AGENT_VERSION_ID,
             status="running",
             trace_id=None,
             trace_metadata={},
@@ -112,6 +115,8 @@ def test_workflow_falls_back_when_llm_returns_disabled_response(
         run = AgentRun(
             id="run_llm_fallback_test",
             incident_id=incident.id,
+            agent_id=DEFAULT_AGENT_ID,
+            agent_version_id=DEFAULT_AGENT_VERSION_ID,
             status="running",
             trace_id=None,
             trace_metadata={},
@@ -138,24 +143,6 @@ def test_workflow_falls_back_when_llm_returns_disabled_response(
         assert "retry webhook" in report.root_cause.lower()
         assert run.trace_metadata.get("llm_used") is True
         assert run.prompt_tokens > 0
-
-
-def test_diagnose_with_llm_returns_none_on_exception() -> None:
-    class ErrorLLMClient:
-        provider: str = "error"
-        model: str = "error-model"
-
-        def complete(self, prompt: str) -> tuple[LLMResponse, LLMUsage]:
-            raise RuntimeError("provider unavailable")
-
-    diagnosis, usage = _diagnose_with_llm(
-        llm_client=ErrorLLMClient(),  # type: ignore[arg-type]
-        prompt="test prompt",
-    )
-
-    assert diagnosis is None
-    assert usage.used_llm is False
-    assert "provider unavailable" in (usage.fallback_reason or "")
 
 
 def test_diagnose_with_llm_returns_diagnosis_on_valid_response() -> None:

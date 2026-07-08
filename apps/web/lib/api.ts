@@ -1,4 +1,4 @@
-import { resolveApiBaseUrl } from './resolveApiBaseUrl';
+import { resolveApiBaseUrl } from './resolveApiBaseUrl.ts';
 
 export type HealthResponse = {
   status: string;
@@ -340,7 +340,7 @@ export type ReportAffectedAccount = {
 };
 
 export type ReportEvidence = {
-  kind: 'sql' | 'document' | 'ticket';
+  kind: 'sql' | 'document' | 'ticket' | 'tool';
   title: string;
   summary: string;
   reference_id: string;
@@ -444,6 +444,8 @@ export type AgentRunStep = {
 export type AgentRunSummary = {
   id: string;
   incident_id: string;
+  agent_id: string;
+  agent_version_id: string;
   status: 'queued' | 'running' | 'succeeded' | 'failed';
   trace_id: string | null;
   trace_url: string | null;
@@ -462,6 +464,21 @@ export type AgentRunSummary = {
 export type AgentRunDetail = {
   id: string;
   incident_id: string;
+  agent_id: string;
+  agent_version_id: string;
+  agent: {
+    id: string;
+    name: string;
+    description: string;
+  } | null;
+  agent_version: {
+    id: string;
+    agent_id: string;
+    version_number: number | null;
+    semantic_version: string | null;
+    status: AgentVersionStatus;
+    model: string;
+  } | null;
   status: 'queued' | 'running' | 'succeeded' | 'failed';
   is_stale: boolean;
   trace_id: string | null;
@@ -897,19 +914,23 @@ export async function listAccounts(): Promise<AccountListResult> {
 
 export async function startInvestigation(
   incidentId: string,
-  options: { runInline?: boolean } & DemoOperatorOptions = {},
+  options: { runInline?: boolean; agentVersionId?: string } & DemoOperatorOptions = {},
 ): Promise<StartInvestigationResult> {
   try {
+    const body: Record<string, unknown> = {
+      incident_id: incidentId,
+      run_inline: options.runInline ?? false,
+    };
+    if (options.agentVersionId) {
+      body.agent_version_id = options.agentVersionId;
+    }
     const response = await fetch(`${resolveApiBaseUrl()}/agent/investigations`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         ...demoOperatorHeaders(options.demoOperatorToken),
       },
-      body: JSON.stringify({
-        incident_id: incidentId,
-        run_inline: options.runInline ?? false,
-      }),
+      body: JSON.stringify(body),
       cache: 'no-store',
     });
 
@@ -1360,7 +1381,9 @@ export async function getAgentVersion(
   try {
     const response = await fetch(
       `${resolveApiBaseUrl()}/agents/${encodeURIComponent(agentId)}/versions/${encodeURIComponent(versionId)}`,
-      { cache: 'no-store' },
+      {
+        cache: 'no-store',
+      },
     );
 
     if (!response.ok) {
