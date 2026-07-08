@@ -33,6 +33,8 @@ test('incident page exposes evidence needed before launching an investigation', 
   assert.match(source, /Support signals/);
   assert.match(source, /Product signals/);
   assert.match(source, /Evidence sources/);
+  assert.match(source, /comparePublishedVersionsNewestFirst/);
+  assert.doesNotMatch(source, /\.reverse\(\)/);
 });
 
 test('agent run page exposes report, trace, cost, citations, approvals, and step history', () => {
@@ -40,6 +42,9 @@ test('agent run page exposes report, trace, cost, citations, approvals, and step
 
   assert.match(source, /Root cause/);
   assert.match(source, /Trace/);
+  assert.match(source, /LLM provider/);
+  assert.match(source, /LLM status/);
+  assert.match(source, /llm_fallback_reason/);
   assert.match(source, /Estimated tokens/);
   assert.match(source, /Estimated cost/);
   assert.match(source, /Claim citations/);
@@ -53,11 +58,30 @@ test('agent run page exposes report, trace, cost, citations, approvals, and step
 test('server actions forward demo operator credentials without public env exposure', () => {
   const apiSource = readWorkspaceFile('lib/api.ts');
   const actionSource = readWorkspaceFile('app/actions.ts');
+  const versionPageSource = readWorkspaceFile('app/agents/[agentId]/versions/[versionId]/page.tsx');
+  const versionLoaderSource = readWorkspaceFile('app/agents/[agentId]/versions/[versionId]/versionLoader.ts');
 
   assert.match(apiSource, /X-Demo-Operator-Token/);
   assert.doesNotMatch(apiSource, /process\.env\.DEMO_OPERATOR_TOKEN/);
-  assert.match(actionSource, /process\.env\.DEMO_OPERATOR_TOKEN/);
+  assert.doesNotMatch(apiSource, /process\.env\.EVAL_RUN_TOKEN/);
+  assert.doesNotMatch(actionSource, /process\.env\.DEMO_OPERATOR_TOKEN/);
+  assert.doesNotMatch(actionSource, /process\.env\.EVAL_RUN_TOKEN/);
   assert.doesNotMatch(actionSource, /NEXT_PUBLIC_DEMO_OPERATOR_TOKEN/);
+  assert.doesNotMatch(versionPageSource, /process\.env\.DEMO_OPERATOR_TOKEN/);
+  assert.doesNotMatch(versionPageSource, /operator_token\?:/);
+  assert.doesNotMatch(versionPageSource, /resolvedSearchParams\?\.operator_token/);
+  assert.match(actionSource, /cookies\(\)/);
+  assert.match(actionSource, /httpOnly:\s*true/);
+  assert.match(actionSource, /sameSite:\s*'strict'/);
+  assert.match(actionSource, /path:\s*returnPath/);
+  assert.match(actionSource, /resolveDemoOperatorToken/);
+  assert.match(actionSource, /unlockAgentVersionDetail/);
+  assert.match(versionPageSource, /action=\{unlockAgentVersionDetail\}/);
+  assert.match(versionPageSource, /shouldRequestProtectedDetail/);
+  assert.match(versionLoaderSource, /isOperatorAuthFailure/);
+  assert.match(versionPageSource, /Version detail temporarily unavailable/);
+  assert.match(versionPageSource, /getAgentVersionDetail/);
+  assert.match(versionPageSource, /Unlock editing/);
 });
 
 test('eval report page exposes scenario scores, failures, and traces', () => {

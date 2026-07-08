@@ -246,6 +246,7 @@ class AgentRun(Base):
         Index(
             "uq_agent_runs_active_incident",
             "incident_id",
+            "agent_version_id",
             unique=True,
             sqlite_where=text("status IN ('queued', 'running')"),
             postgresql_where=text("status IN ('queued', 'running')"),

@@ -7,6 +7,7 @@ from typing import Any, Protocol
 import httpx
 
 from app.core.config import get_settings
+from app.llm.models import provider_for_model
 from app.llm.prompts import compose_system_prompt
 from app.llm.schemas import LLMResponse, LLMUsage
 from app.llm.tokenizer import count_tokens
@@ -27,6 +28,10 @@ class LLMClient(Protocol):
         ...
 
 
+class LLMConfigurationError(RuntimeError):
+    """Raised when LLM egress is enabled but the configured model cannot run."""
+
+
 class NoopLLMClient:
     """Fallback client used when no LLM provider is configured.
 
@@ -34,8 +39,16 @@ class NoopLLMClient:
     the source of truth in that mode.
     """
 
-    provider: str = "none"
-    model: str = "none"
+    def __init__(
+        self,
+        *,
+        provider: str = "none",
+        model: str = "none",
+        fallback_reason: str = "llm_provider=none",
+    ) -> None:
+        self.provider = provider
+        self.model = model
+        self.fallback_reason = fallback_reason
 
     def complete(self, prompt: str) -> tuple[LLMResponse, LLMUsage]:
         response = LLMResponse(
@@ -50,7 +63,7 @@ class NoopLLMClient:
             prompt_tokens=count_tokens(prompt),
             completion_tokens=count_tokens(response.root_cause),
             used_llm=False,
-            fallback_reason="llm_provider=none",
+            fallback_reason=self.fallback_reason,
         )
         return response, usage
 
@@ -215,10 +228,25 @@ def build_llm_client_for_version(version_config: VersionConfigLike) -> LLMClient
         else settings.llm_max_tokens
     )
     system_prompt = version_config.system_prompt or None
+    provider = provider_for_model(model)
 
-    if settings.llm_provider == "openai":
+    if settings.llm_provider == "none":
+        return NoopLLMClient(
+            provider="none",
+            model=model,
+            fallback_reason="llm_provider=none",
+        )
+    if provider is None:
+        raise LLMConfigurationError(f"Unsupported LLM model for provider egress: {model}")
+    if provider != settings.llm_provider:
+        raise LLMConfigurationError(
+            "LLM provider/model mismatch: "
+            f"configured={settings.llm_provider} model_provider={provider} model={model}"
+        )
+
+    if provider == "openai":
         if not settings.openai_api_key:
-            return NoopLLMClient()
+            raise LLMConfigurationError("LLM provider openai is enabled but OPENAI_API_KEY is unset")
         return OpenAIClient(
             api_key=settings.openai_api_key,
             model=model,
@@ -227,9 +255,11 @@ def build_llm_client_for_version(version_config: VersionConfigLike) -> LLMClient
             timeout_seconds=settings.llm_timeout_seconds,
             system_prompt=system_prompt,
         )
-    if settings.llm_provider == "anthropic":
+    if provider == "anthropic":
         if not settings.anthropic_api_key:
-            return NoopLLMClient()
+            raise LLMConfigurationError(
+                "LLM provider anthropic is enabled but ANTHROPIC_API_KEY is unset"
+            )
         return AnthropicClient(
             api_key=settings.anthropic_api_key,
             model=model,
@@ -238,4 +268,4 @@ def build_llm_client_for_version(version_config: VersionConfigLike) -> LLMClient
             timeout_seconds=settings.llm_timeout_seconds,
             system_prompt=system_prompt,
         )
-    return NoopLLMClient()
+    raise LLMConfigurationError(f"Unsupported LLM provider: {provider}")

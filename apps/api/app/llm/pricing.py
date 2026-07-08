@@ -14,11 +14,29 @@ PRICING_TABLE: dict[str, ModelPricing] = {
     "gpt-4o-mini": ModelPricing(input_price_per_1m_tokens=0.15, output_price_per_1m_tokens=0.60),
     "gpt-4-turbo": ModelPricing(input_price_per_1m_tokens=10.00, output_price_per_1m_tokens=30.00),
     "gpt-3.5-turbo": ModelPricing(input_price_per_1m_tokens=0.50, output_price_per_1m_tokens=1.50),
+    "claude-fable-5": ModelPricing(
+        input_price_per_1m_tokens=10.00, output_price_per_1m_tokens=50.00
+    ),
+    "claude-opus-4-8": ModelPricing(
+        input_price_per_1m_tokens=5.00, output_price_per_1m_tokens=25.00
+    ),
+    "claude-sonnet-5": ModelPricing(
+        input_price_per_1m_tokens=3.00, output_price_per_1m_tokens=15.00
+    ),
+    "claude-haiku-4-5": ModelPricing(
+        input_price_per_1m_tokens=1.00, output_price_per_1m_tokens=5.00
+    ),
+    "claude-haiku-4-5-20251001": ModelPricing(
+        input_price_per_1m_tokens=1.00, output_price_per_1m_tokens=5.00
+    ),
     "claude-3-5-haiku-latest": ModelPricing(
         input_price_per_1m_tokens=0.80, output_price_per_1m_tokens=4.00
     ),
     "claude-3-5-sonnet-latest": ModelPricing(
         input_price_per_1m_tokens=3.00, output_price_per_1m_tokens=15.00
+    ),
+    "claude-3-haiku-20240307": ModelPricing(
+        input_price_per_1m_tokens=0.25, output_price_per_1m_tokens=1.25
     ),
     "claude-3-opus-latest": ModelPricing(
         input_price_per_1m_tokens=15.00, output_price_per_1m_tokens=75.00

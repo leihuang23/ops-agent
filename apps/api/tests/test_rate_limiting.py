@@ -10,6 +10,7 @@ from slowapi.util import get_remote_address
 from slowapi.wrappers import LimitGroup
 
 from app.core.limiter import build_limiter, limiter
+from app.core.config import get_settings
 from app.main import create_app
 
 
@@ -71,7 +72,7 @@ def test_build_limiter_falls_back_to_memory_when_redis_is_unavailable(
     assert limiter._storage.__class__.__name__ == "MemoryStorage"
 
 
-def test_real_mutation_route_enforces_rate_limit_with_structured_envelope() -> None:
+def test_real_mutation_route_enforces_rate_limit_with_structured_envelope(monkeypatch) -> None:
     """Real decorated mutation routes must enforce limits and return the Phase 2
     structured error envelope (not a bare ``{"detail": ...}`` body) on 429.
 
@@ -102,6 +103,10 @@ def test_real_mutation_route_enforces_rate_limit_with_structured_envelope() -> N
     fresh_storage = MemoryStorage("memory://")
     limiter._route_limits[route_name] = test_limits
     limiter._storage = fresh_storage
+    monkeypatch.setattr(
+        "app.approvals.router.approve_request",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(LookupError("not found")),
+    )
 
     try:
         client = TestClient(create_app())
@@ -123,3 +128,60 @@ def test_real_mutation_route_enforces_rate_limit_with_structured_envelope() -> N
         limiter._route_limits[route_name] = original_limits
         limiter._storage = original_storage
         fresh_storage.reset()
+
+
+def test_agent_version_detail_route_is_rate_limited(monkeypatch) -> None:
+    import app.agents.router  # noqa: F401 — ensure decorators are registered
+
+    monkeypatch.setenv("APP_ENV", "demo")
+    monkeypatch.setenv("DEMO_OPERATOR_TOKEN", "operator-secret")
+    get_settings.cache_clear()
+    route_name = "app.agents.router.version_detail"
+    original_limits = limiter._route_limits.get(route_name, [])
+    original_storage = limiter._storage
+    assert original_limits
+
+    ref = original_limits[0]
+    test_limits = list(
+        LimitGroup(
+            "2/minute",
+            ref.key_func,
+            ref.scope,
+            ref.per_method,
+            ref.methods,
+            ref.error_message,
+            ref.exempt_when,
+            ref.cost,
+            ref.override_defaults,
+        )
+    )
+    fresh_storage = MemoryStorage("memory://")
+    limiter._route_limits[route_name] = test_limits
+    limiter._storage = fresh_storage
+    monkeypatch.setattr("app.agents.router.get_version", lambda *_args, **_kwargs: None)
+
+    try:
+        client = TestClient(create_app())
+        headers = {"X-Demo-Operator-Token": "operator-secret"}
+        client.get(
+            "/agents/revenue-ops-agent/versions/revenue-ops-agent_v1",
+            headers=headers,
+        )
+        client.get(
+            "/agents/revenue-ops-agent/versions/revenue-ops-agent_v1",
+            headers=headers,
+        )
+        response = client.get(
+            "/agents/revenue-ops-agent/versions/revenue-ops-agent_v1",
+            headers=headers,
+        )
+
+        assert response.status_code == 429
+        assert response.json()["error"]["code"] == "rate_limited"
+    finally:
+        limiter._route_limits[route_name] = original_limits
+        limiter._storage = original_storage
+        fresh_storage.reset()
+        monkeypatch.delenv("APP_ENV", raising=False)
+        monkeypatch.delenv("DEMO_OPERATOR_TOKEN", raising=False)
+        get_settings.cache_clear()

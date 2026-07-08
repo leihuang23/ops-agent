@@ -17,15 +17,16 @@ from app.agent.schemas import (
     InvestigationReport,
 )
 from app.agent.tracing import AgentTraceHandle, start_agent_trace
-from app.agent.workflow import run_investigation_workflow
+from app.agent.workflow import LLMRuntimeError, run_investigation_workflow
 from app.agents.service import (
     get_default_published_version,
     get_published_version,
 )
 from app.approvals.service import list_mock_actions_for_run, propose_actions_for_report
 from app.cache import Cache
+from app.core.config import get_settings
 from app.db.session import SessionLocal
-from app.llm import build_llm_client_for_version
+from app.llm import LLMConfigurationError, build_llm_client_for_version
 from app.logging_config import get_logger
 from app.models import AgentRun, AgentRunStep, AgentVersion, Incident
 
@@ -36,6 +37,17 @@ logger = get_logger(__name__)
 
 
 IDEMPOTENCY_CACHE_TTL_SECONDS = 3600
+
+
+def _idempotency_request_key(
+    key: str, *, incident_id: str, requested_agent_version_id: str | None
+) -> str:
+    version_selector = (
+        f"explicit:{requested_agent_version_id}"
+        if requested_agent_version_id is not None
+        else "default"
+    )
+    return f"{incident_id}:{version_selector}:{key}"
 
 
 def create_investigation_run(
@@ -69,10 +81,15 @@ def create_investigation_run(
 
     if idempotency_key:
         cache = Cache()
-        existing_run_id = cache.get_idempotency_value(idempotency_key)
+        request_key = _idempotency_request_key(
+            idempotency_key,
+            incident_id=incident_id,
+            requested_agent_version_id=agent_version_id,
+        )
+        existing_run_id = cache.get_idempotency_value(request_key)
         if existing_run_id:
             existing_run = session.get(AgentRun, existing_run_id)
-            if existing_run is not None:
+            if existing_run is not None and existing_run.incident_id == incident_id:
                 return get_run_detail(session, existing_run_id), False
 
     if not force:
@@ -107,7 +124,6 @@ def create_investigation_run(
                 "model": agent_version.model,
                 "temperature": agent_version.temperature,
                 "max_tokens": agent_version.max_tokens,
-                "system_prompt": agent_version.system_prompt,
                 "enabled_tool_ids": list(agent_version.enabled_tool_ids or []),
             },
         },
@@ -129,15 +145,18 @@ def create_investigation_run(
             session, incident_id, active_only=True, agent_version_id=resolved_version_id
         )
         if reusable_run_id is None:
-            reusable_run_id = _latest_reusable_run_id(session, incident_id, active_only=True)
-        if reusable_run_id is None:
             raise
         return get_run_detail(session, reusable_run_id), False
 
     if idempotency_key:
         cache = Cache()
+        request_key = _idempotency_request_key(
+            idempotency_key,
+            incident_id=incident_id,
+            requested_agent_version_id=agent_version_id,
+        )
         cache.set_idempotency_value(
-            idempotency_key, run.id, IDEMPOTENCY_CACHE_TTL_SECONDS
+            request_key, run.id, IDEMPOTENCY_CACHE_TTL_SECONDS
         )
 
     return get_run_detail(session, run.id), True
@@ -148,10 +167,15 @@ def start_investigation_run(
     incident_id: str,
     *,
     force: bool = False,
+    idempotency_key: str | None = None,
     agent_version_id: str | None = None,
 ) -> tuple[AgentRunDetail, bool]:
     run, created = create_investigation_run(
-        session, incident_id, force=force, agent_version_id=agent_version_id
+        session,
+        incident_id,
+        force=force,
+        idempotency_key=idempotency_key,
+        agent_version_id=agent_version_id,
     )
     if not created:
         return run, False
@@ -215,74 +239,90 @@ def execute_investigation_run_with_session(
     session.refresh(run)
     _invalidate_run_detail_cache(run_id)
 
-    agent_version = session.get(AgentVersion, run.agent_version_id) if run.agent_version_id else None
-    version_warning: str | None = None
-    fallback_version_id: str | None = None
-    if agent_version is None:
-        from app.agents.service import get_default_published_version
-        fallback = get_default_published_version(session)
-        if fallback is None:
-            _finish_trace(
-                trace,
-                error=(
+    try:
+        agent_version = session.get(AgentVersion, run.agent_version_id) if run.agent_version_id else None
+        version_warning: str | None = None
+        fallback_version_id: str | None = None
+        if agent_version is None:
+            from app.agents.service import get_default_published_version
+            fallback = get_default_published_version(session)
+            if fallback is None:
+                _finish_trace(
+                    trace,
+                    error=(
+                        f"Agent version {run.agent_version_id!r} not found and no default "
+                        "published version is available; cannot start investigation."
+                    ),
+                )
+                run.status = "failed"
+                run.error = (
                     f"Agent version {run.agent_version_id!r} not found and no default "
-                    "published version is available; cannot start investigation."
-                ),
+                    "published version is available. Seed the database or create a "
+                    "default agent before running investigations."
+                )
+                run.completed_at = utcnow_naive()
+                run.updated_at = run.completed_at
+                session.commit()
+                _invalidate_run_detail_cache(run.id)
+                logger.error(
+                    "Cannot start investigation: no agent version available",
+                    extra={"run_id": run.id, "requested_version_id": run.agent_version_id},
+                )
+                return get_run_detail(session, run.id)
+            llm_client = build_llm_client_for_version(fallback)
+            enabled_tool_ids: set[str] = set(fallback.enabled_tool_ids or [])
+            requested_version_id = run.agent_version_id
+            version_warning = (
+                f"Agent version {requested_version_id!r} not found; falling back "
+                f"to default published version {fallback.id!r}."
             )
-            run.status = "failed"
-            run.error = (
-                f"Agent version {run.agent_version_id!r} not found and no default "
-                "published version is available. Seed the database or create a "
-                "default agent before running investigations."
-            )
-            run.completed_at = utcnow_naive()
-            run.updated_at = run.completed_at
-            session.commit()
-            _invalidate_run_detail_cache(run.id)
-            logger.error(
-                "Cannot start investigation: no agent version available",
-                extra={"run_id": run.id, "requested_version_id": run.agent_version_id},
-            )
-            return get_run_detail(session, run.id)
-        llm_client = build_llm_client_for_version(fallback)
-        enabled_tool_ids: set[str] = set(fallback.enabled_tool_ids or [])
-        requested_version_id = run.agent_version_id
-        version_warning = (
-            f"Agent version {requested_version_id!r} not found; falling back "
-            f"to default published version {fallback.id!r}."
-        )
-        fallback_version_id = fallback.id
-        run.agent_id = fallback.agent_id
-        run.agent_version_id = fallback.id
-        run.trace_metadata = {
-            **(run.trace_metadata or {}),
-            "version_fallback": {
-                "requested_version_id": requested_version_id,
-                "fallback_version_id": fallback.id,
-                "reason": "requested_version_not_found",
-            },
-        }
-        if isinstance(run.input_payload, dict):
-            run.input_payload = {
-                **run.input_payload,
-                "agent_version_id": fallback.id,
-                "agent_version": {
-                    "id": fallback.id,
-                    "version_number": fallback.version_number,
-                    "semantic_version": fallback.semantic_version,
-                    "model": fallback.model,
-                    "system_prompt": fallback.system_prompt,
-                    "enabled_tool_ids": list(fallback.enabled_tool_ids or []),
-                },
+            fallback_version_id = fallback.id
+            run.agent_id = fallback.agent_id
+            run.agent_version_id = fallback.id
+            run.trace_metadata = {
+                **(run.trace_metadata or {}),
                 "version_fallback": {
-                    "from": requested_version_id,
-                    "to": fallback.id,
+                    "requested_version_id": requested_version_id,
+                    "fallback_version_id": fallback.id,
+                    "reason": "requested_version_not_found",
                 },
             }
-        session.flush()
-    else:
-        llm_client = build_llm_client_for_version(agent_version)
-        enabled_tool_ids = set(agent_version.enabled_tool_ids or [])
+            if isinstance(run.input_payload, dict):
+                run.input_payload = {
+                    **run.input_payload,
+                    "agent_version_id": fallback.id,
+                    "agent_version": {
+                        "id": fallback.id,
+                        "version_number": fallback.version_number,
+                        "semantic_version": fallback.semantic_version,
+                        "model": fallback.model,
+                        "enabled_tool_ids": list(fallback.enabled_tool_ids or []),
+                    },
+                    "version_fallback": {
+                        "from": requested_version_id,
+                        "to": fallback.id,
+                    },
+                }
+            session.flush()
+        else:
+            llm_client = build_llm_client_for_version(agent_version)
+            enabled_tool_ids = set(agent_version.enabled_tool_ids or [])
+    except LLMConfigurationError as exc:
+        failed_version_config = agent_version
+        if failed_version_config is None and "fallback" in locals():
+            failed_version_config = fallback
+        trace_metadata = _llm_configuration_failure_metadata(
+            version_config=failed_version_config,
+            error=exc,
+        )
+        return _fail_running_run(
+            session,
+            run_id=run.id,
+            trace=trace,
+            error=exc,
+            log_message="Investigation run failed before workflow start",
+            trace_metadata=trace_metadata,
+        )
     if version_warning:
         logger.warning(
             "Agent version fallback during execution",
@@ -300,30 +340,24 @@ def execute_investigation_run_with_session(
             session, run, trace, llm_client=llm_client,
             enabled_tool_ids=enabled_tool_ids,
         )
-    except Exception as exc:
-        _finish_trace(trace, error=str(exc))
-        session.rollback()
-        failed_run = session.get(AgentRun, run.id)
-        if failed_run is None:
-            raise
-        if failed_run.status != "running":
-            return get_run_detail(session, failed_run.id)
-        completed_at = utcnow_naive()
-        failed_run.status = "failed"
-        failed_run.error = str(exc)
-        failed_run.completed_at = completed_at
-        failed_run.updated_at = completed_at
-        session.commit()
-        _invalidate_run_detail_cache(failed_run.id)
-        logger.error(
-            "Investigation run failed",
-            extra={
-                "run_id": failed_run.id,
-                "incident_id": failed_run.incident_id,
-                "error": failed_run.error,
-            },
+    except LLMRuntimeError as exc:
+        trace_metadata = _llm_runtime_failure_metadata(llm_client, error=exc)
+        return _fail_running_run(
+            session,
+            run_id=run.id,
+            trace=trace,
+            error=exc,
+            log_message="Investigation run failed",
+            trace_metadata=trace_metadata,
         )
-        return get_run_detail(session, failed_run.id)
+    except Exception as exc:
+        return _fail_running_run(
+            session,
+            run_id=run.id,
+            trace=trace,
+            error=exc,
+            log_message="Investigation run failed",
+        )
 
     completed_at = utcnow_naive()
     finished_run = session.get(AgentRun, run.id)
@@ -389,6 +423,74 @@ def execute_investigation_run_with_session(
     )
 
     return get_run_detail(session, finished_run.id)
+
+
+def _llm_configuration_failure_metadata(
+    *,
+    version_config: AgentVersion | None,
+    error: Exception,
+) -> dict[str, object]:
+    model = version_config.model if version_config is not None else None
+    settings = get_settings()
+    return {
+        "agent_version_id": version_config.id if version_config is not None else None,
+        "llm_provider": settings.llm_provider,
+        "llm_model": model or "unknown",
+        "llm_used": False,
+        "llm_fallback_reason": f"llm_configuration_error: {error}",
+    }
+
+
+def _llm_runtime_failure_metadata(
+    llm_client: object,
+    *,
+    error: Exception,
+) -> dict[str, object]:
+    return {
+        "llm_provider": getattr(llm_client, "provider", "unknown"),
+        "llm_model": getattr(llm_client, "model", "unknown"),
+        "llm_used": False,
+        "llm_fallback_reason": f"llm_runtime_error: {error}",
+    }
+
+
+def _fail_running_run(
+    session: Session,
+    *,
+    run_id: str,
+    trace: AgentTraceHandle,
+    error: Exception,
+    log_message: str,
+    trace_metadata: dict[str, object] | None = None,
+) -> AgentRunDetail:
+    _finish_trace(trace, error=str(error))
+    session.rollback()
+    failed_run = session.get(AgentRun, run_id)
+    if failed_run is None:
+        raise error
+    if failed_run.status != "running":
+        return get_run_detail(session, failed_run.id)
+    completed_at = utcnow_naive()
+    failed_run.status = "failed"
+    failed_run.error = str(error)
+    if trace_metadata:
+        failed_run.trace_metadata = {
+            **(failed_run.trace_metadata or {}),
+            **trace_metadata,
+        }
+    failed_run.completed_at = completed_at
+    failed_run.updated_at = completed_at
+    session.commit()
+    _invalidate_run_detail_cache(failed_run.id)
+    logger.error(
+        log_message,
+        extra={
+            "run_id": failed_run.id,
+            "incident_id": failed_run.incident_id,
+            "error": failed_run.error,
+        },
+    )
+    return get_run_detail(session, failed_run.id)
 
 
 def _propose_report_actions(
@@ -460,6 +562,19 @@ def _serialize_run_detail(detail: AgentRunDetail) -> dict[str, object]:
     return detail.model_dump(mode="json")
 
 
+def _redact_run_input_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+
+    redacted = dict(payload)
+    agent_version = redacted.get("agent_version")
+    if isinstance(agent_version, dict):
+        safe_agent_version = dict(agent_version)
+        safe_agent_version.pop("system_prompt", None)
+        redacted["agent_version"] = safe_agent_version
+    return redacted
+
+
 def _invalidate_run_detail_cache(run_id: str) -> None:
     Cache().delete(_run_detail_cache_key(run_id))
 
@@ -469,6 +584,8 @@ def get_run_detail(session: Session, run_id: str) -> AgentRunDetail:
     cache_key = _run_detail_cache_key(run_id)
     cached = cache.get(cache_key)
     if cached is not None:
+        if isinstance(cached.get("input_payload"), dict):
+            cached["input_payload"] = _redact_run_input_payload(cached["input_payload"])  # type: ignore[arg-type]
         return AgentRunDetail.model_validate(cached)
 
     run = session.scalar(
@@ -528,7 +645,7 @@ def get_run_detail(session: Session, run_id: str) -> AgentRunDetail:
         prompt_tokens=run.prompt_tokens,
         completion_tokens=run.completion_tokens,
         cost_estimate_usd=run.cost_estimate_usd,
-        input_payload=run.input_payload,
+        input_payload=_redact_run_input_payload(run.input_payload),
         final_report=InvestigationReport.model_validate(run.final_report)
         if run.final_report is not None
         else None,

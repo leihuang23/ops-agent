@@ -22,6 +22,45 @@ type IncidentPageProps = {
 
 const DEFAULT_AGENT_ID = 'revenue-ops-agent';
 
+type PublishedVersionLike = {
+  id: string;
+  version_number: number | null;
+  semantic_version: string | null;
+  published_at: string | null;
+};
+
+function comparePublishedVersionsNewestFirst(
+  a: PublishedVersionLike,
+  b: PublishedVersionLike,
+) {
+  if (a.version_number === null && b.version_number !== null) {
+    return 1;
+  }
+  if (a.version_number !== null && b.version_number === null) {
+    return -1;
+  }
+  if (a.version_number !== null && b.version_number !== null) {
+    const versionDelta = b.version_number - a.version_number;
+    if (versionDelta !== 0) {
+      return versionDelta;
+    }
+  }
+
+  const aPublishedAt = a.published_at ? Date.parse(a.published_at) : 0;
+  const bPublishedAt = b.published_at ? Date.parse(b.published_at) : 0;
+  if (aPublishedAt !== bPublishedAt) {
+    return bPublishedAt - aPublishedAt;
+  }
+
+  return b.id.localeCompare(a.id);
+}
+
+function formatAgentVersionLabel(agentName: string, version: PublishedVersionLike) {
+  const versionLabel = version.version_number === null ? 'legacy' : version.version_number;
+  const semanticLabel = version.semantic_version ? ` (${version.semantic_version})` : '';
+  return `${agentName} · v${versionLabel}${semanticLabel}`;
+}
+
 export default async function IncidentPage({ params, searchParams }: IncidentPageProps) {
   const { incidentId } = await params;
   const resolvedSearchParams = await searchParams;
@@ -69,10 +108,10 @@ export default async function IncidentPage({ params, searchParams }: IncidentPag
       ? defaultVersionsResult.data.versions
           .filter((v) => v.status === 'published')
           .slice()
-          .reverse()
+          .sort(comparePublishedVersionsNewestFirst)
           .map((v) => ({
             version_id: v.id,
-            label: `${defaultAgent.name} · v${v.version_number} (${v.semantic_version})`,
+            label: formatAgentVersionLabel(defaultAgent.name, v),
           }))
       : agentsResult.ok
         ? agents.flatMap((agent) =>
@@ -80,7 +119,7 @@ export default async function IncidentPage({ params, searchParams }: IncidentPag
               ? [
                   {
                     version_id: agent.latest_published_version.id,
-                    label: `${agent.name} · v${agent.latest_published_version.version_number}`,
+                    label: formatAgentVersionLabel(agent.name, agent.latest_published_version),
                   },
                 ]
               : [],
@@ -121,6 +160,13 @@ export default async function IncidentPage({ params, searchParams }: IncidentPag
             ) : defaultVersion ? (
               <input name="agent_version_id" type="hidden" value={defaultVersion.version_id} />
             ) : null}
+            <input
+              name="operator_token"
+              type="password"
+              className="field-input"
+              placeholder="Operator token"
+              autoComplete="off"
+            />
             <button className="action-button" type="submit">
               Run investigation
             </button>

@@ -59,12 +59,26 @@ export default async function ApprovalsPage({
                     <div className="approval-buttons">
                       <form action={approveApprovalFromQueue}>
                         <input type="hidden" name="approval_id" value={approval.id} />
+                        <input
+                          name="operator_token"
+                          type="password"
+                          className="field-input"
+                          placeholder="Operator token"
+                          autoComplete="off"
+                        />
                         <button type="submit" className="action-button">
                           Approve
                         </button>
                       </form>
                       <form action={rejectApprovalFromQueue}>
                         <input type="hidden" name="approval_id" value={approval.id} />
+                        <input
+                          name="operator_token"
+                          type="password"
+                          className="field-input"
+                          placeholder="Operator token"
+                          autoComplete="off"
+                        />
                         <button type="submit" className="action-button secondary-action">
                           Reject
                         </button>

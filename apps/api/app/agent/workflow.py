@@ -37,6 +37,10 @@ from app.incidents.service import get_incident_detail
 from app.models import AgentRun
 
 
+class LLMRuntimeError(RuntimeError):
+    """Raised when an enabled LLM provider fails during completion."""
+
+
 class InvestigationState(TypedDict, total=False):
     run_id: str
     incident_id: str
@@ -154,21 +158,34 @@ def run_investigation_workflow(
                 ).model_dump(mode="json"),
             )
         else:
-            incident = state["incident"]
-            metrics = {
-                "incident_id": incident_id,
-                "metric_evidence": incident["metric_evidence"],
-                "affected_account_ids": [
-                    a["account_id"] for a in incident["affected_accounts"]
-                ],
-                "affected_accounts": incident["affected_accounts"],
-                "invoice_ids": incident["metric_evidence"].get("invoice_ids", []),
-                "sql_evidence": [],
-                "tool_disabled": True,
-                "tool_disabled_reason": "query_revenue_metrics was not enabled for this agent version; using incident summary only.",
-            }
+            metrics = recorder.record(
+                stage="query metrics",
+                tool_name="query_revenue_metrics",
+                inputs={"incident_id": incident_id},
+                action=lambda: _disabled_revenue_metrics(incident_id, state["incident"]),
+            )
 
         if "fetch_account_details" in enabled:
+            account_invoice_ids = [] if metrics.get("tool_disabled") else metrics["invoice_ids"]
+            include_invoice_evidence = not bool(metrics.get("tool_disabled"))
+            account_details = recorder.record(
+                stage="query metrics",
+                tool_name="fetch_account_details",
+                inputs={
+                    "account_ids": metrics["affected_account_ids"],
+                    "invoice_ids": account_invoice_ids,
+                    "include_invoices": include_invoice_evidence,
+                },
+                action=lambda: fetch_account_details(
+                    session,
+                    FetchAccountDetailsInput(
+                        account_ids=metrics["affected_account_ids"],
+                        invoice_ids=account_invoice_ids,
+                        include_invoices=include_invoice_evidence,
+                    ),
+                ).model_dump(mode="json"),
+            )
+        else:
             account_details = recorder.record(
                 stage="query metrics",
                 tool_name="fetch_account_details",
@@ -176,20 +193,12 @@ def run_investigation_workflow(
                     "account_ids": metrics["affected_account_ids"],
                     "invoice_ids": metrics["invoice_ids"],
                 },
-                action=lambda: fetch_account_details(
-                    session,
-                    FetchAccountDetailsInput(
-                        account_ids=metrics["affected_account_ids"],
-                        invoice_ids=metrics["invoice_ids"],
-                    ),
-                ).model_dump(mode="json"),
+                action=lambda: {
+                    "accounts": [],
+                    "tool_disabled": True,
+                    "tool_disabled_reason": "fetch_account_details was not enabled for this agent version.",
+                },
             )
-        else:
-            account_details = {
-                "accounts": [],
-                "tool_disabled": True,
-                "tool_disabled_reason": "fetch_account_details was not enabled for this agent version.",
-            }
 
         return {"revenue_metrics": metrics, "account_details": account_details}
 
@@ -205,12 +214,17 @@ def run_investigation_workflow(
                 ).model_dump(mode="json"),
             )
         else:
-            doc_results = {
-                "query": plan.get("doc_query", ""),
-                "results": [],
-                "tool_disabled": True,
-                "tool_disabled_reason": "search_docs was not enabled for this agent version.",
-            }
+            doc_results = recorder.record(
+                stage="search docs",
+                tool_name="search_docs",
+                inputs={"query": plan.get("doc_query", ""), "limit": 5},
+                action=lambda: {
+                    "query": plan.get("doc_query", ""),
+                    "results": [],
+                    "tool_disabled": True,
+                    "tool_disabled_reason": "search_docs was not enabled for this agent version.",
+                },
+            )
         return {"doc_results": doc_results}
 
     def fetch_tickets_node(state: InvestigationState) -> dict[str, Any]:
@@ -236,11 +250,20 @@ def run_investigation_workflow(
                 ).model_dump(mode="json"),
             )
         else:
-            support_tickets = {
-                "tickets": [],
-                "tool_disabled": True,
-                "tool_disabled_reason": "fetch_support_tickets was not enabled for this agent version.",
-            }
+            support_tickets = recorder.record(
+                stage="fetch tickets",
+                tool_name="fetch_support_tickets",
+                inputs={
+                    "account_ids": plan["account_ids"],
+                    "since": since,
+                    "limit": 24,
+                },
+                action=lambda: {
+                    "tickets": [],
+                    "tool_disabled": True,
+                    "tool_disabled_reason": "fetch_support_tickets was not enabled for this agent version.",
+                },
+            )
         return {"support_tickets": support_tickets}
 
     def synthesize_report_node(state: InvestigationState) -> dict[str, Any]:
@@ -282,6 +305,41 @@ def run_investigation_workflow(
     graph = builder.compile()
     final_state = graph.invoke({"run_id": run.id, "incident_id": run.incident_id})
     return InvestigationReport.model_validate(final_state["final_report"])
+
+
+def _disabled_revenue_metrics(
+    incident_id: str, incident: dict[str, Any]
+) -> dict[str, Any]:
+    source = incident.get("metric_evidence", {})
+    incident_account_ids = [
+        account["account_id"]
+        for account in incident.get("affected_accounts", [])
+        if account.get("account_id")
+    ]
+    metric_evidence = {
+        "metric_name": source.get("metric_name", "unknown"),
+        "current_window_start": source.get("current_window_start"),
+        "current_window_end": source.get("current_window_end"),
+        "previous_window_start": source.get("previous_window_start"),
+        "previous_window_end": source.get("previous_window_end"),
+        "current_value_cents": 0,
+        "previous_value_cents": 0,
+        "delta_cents": 0,
+        "delta_percent": 0.0,
+        "failed_invoice_cents": 0,
+        "failed_invoice_count": 0,
+        "invoice_ids": [],
+    }
+    return {
+        "incident_id": incident_id,
+        "metric_evidence": metric_evidence,
+        "affected_account_ids": incident_account_ids,
+        "affected_accounts": [],
+        "invoice_ids": [],
+        "sql_evidence": [],
+        "tool_disabled": True,
+        "tool_disabled_reason": "query_revenue_metrics was not enabled for this agent version.",
+    }
 
 
 def _synthesize_report(
@@ -376,6 +434,7 @@ def _synthesize_report(
 
     evidence = _report_evidence(
         revenue_metrics=revenue_metrics,
+        account_details=account_details,
         doc_results=doc_results,
         support_tickets=support_tickets,
     )
@@ -386,11 +445,21 @@ def _synthesize_report(
         diagnosis=diagnosis,
     )
     affected_count = len(affected_accounts)
-    account_context = (
-        f"{affected_count} accounts have failed renewal evidence."
-        if affected_count
-        else "No affected accounts were confirmed by the available evidence."
+    confirmed_invoice_account_count = sum(
+        1 for account in affected_accounts if account.failed_invoice_ids
     )
+    if revenue_metrics.get("tool_disabled"):
+        account_context = (
+            f"{affected_count} incident accounts were reviewed without revenue metric evidence."
+            if affected_count
+            else "No affected accounts were confirmed by the available evidence."
+        )
+    elif confirmed_invoice_account_count:
+        account_context = (
+            f"{confirmed_invoice_account_count} accounts have failed renewal evidence."
+        )
+    else:
+        account_context = "No affected accounts were confirmed by the available evidence."
 
     raw_report = {
         "root_cause": diagnosis.root_cause,
@@ -404,6 +473,7 @@ def _synthesize_report(
             for claim in _report_claims(
                 diagnosis=diagnosis,
                 evidence=evidence,
+                revenue_metrics=revenue_metrics,
                 affected_count=affected_count,
                 account_context=account_context,
             )
@@ -419,6 +489,7 @@ def _report_claims(
     *,
     diagnosis: Diagnosis,
     evidence: list[ReportEvidence],
+    revenue_metrics: dict[str, Any],
     affected_count: int,
     account_context: str,
 ) -> list[ReportClaim]:
@@ -432,12 +503,27 @@ def _report_claims(
         refs_by_kind.get("document", []),
         refs_by_kind.get("ticket", []),
     )
-    impact_refs = _first_refs(refs_by_kind.get("sql", []), refs_by_kind.get("ticket", []))
+    impact_refs = _first_refs(
+        refs_by_kind.get("sql", []),
+        refs_by_kind.get("ticket", []),
+        refs_by_kind.get("tool", []),
+    )
     recommendation_refs = _first_refs(
         refs_by_kind.get("document", []),
         refs_by_kind.get("ticket", []),
         refs_by_kind.get("sql", []),
+        refs_by_kind.get("tool", []),
     )
+    tool_refs = refs_by_kind.get("tool", [])
+    metrics_disabled = bool(revenue_metrics.get("tool_disabled"))
+    if metrics_disabled:
+        root_cause_refs = _first_refs(tool_refs)
+        impact_refs = _first_refs(tool_refs)
+        recommendation_refs = _first_refs(
+            tool_refs,
+            refs_by_kind.get("document", []),
+            refs_by_kind.get("ticket", []),
+        )
 
     claims = [
         ReportClaim(
@@ -469,7 +555,18 @@ def _report_claims(
                     "The available evidence is insufficient to prove a specific "
                     "operational root cause."
                 ),
-                citation_refs=all_refs[:2],
+                citation_refs=tool_refs or all_refs[:2],
+            )
+        )
+    elif tool_refs:
+        claims.append(
+            ReportClaim(
+                category="uncertainty",
+                text=(
+                    "Some evidence-producing tools were disabled for this agent "
+                    "version and are cited separately from retrieved evidence."
+                ),
+                citation_refs=tool_refs,
             )
         )
 
@@ -490,10 +587,21 @@ def _first_refs(*groups: list[str], limit: int = 4) -> list[str]:
 def _report_evidence(
     *,
     revenue_metrics: dict[str, Any],
+    account_details: dict[str, Any],
     doc_results: dict[str, Any],
     support_tickets: dict[str, Any],
 ) -> list[ReportEvidence]:
     evidence: list[ReportEvidence] = []
+    if revenue_metrics.get("tool_disabled"):
+        evidence.append(_tool_disabled_evidence("query_revenue_metrics", revenue_metrics))
+    if account_details.get("tool_disabled"):
+        evidence.append(_tool_disabled_evidence("fetch_account_details", account_details))
+    if doc_results.get("tool_disabled"):
+        evidence.append(_tool_disabled_evidence("search_docs", doc_results))
+    if support_tickets.get("tool_disabled"):
+        evidence.append(
+            _tool_disabled_evidence("fetch_support_tickets", support_tickets)
+        )
     for item in revenue_metrics["sql_evidence"]:
         evidence.append(
             ReportEvidence(
@@ -538,6 +646,25 @@ def _report_evidence(
             )
         )
     return evidence
+
+
+def _tool_disabled_evidence(tool_name: str, payload: dict[str, Any]) -> ReportEvidence:
+    reason = payload.get(
+        "tool_disabled_reason",
+        f"{tool_name} was not enabled for this agent version.",
+    )
+    return ReportEvidence(
+        kind="tool",
+        title=f"{tool_name} disabled",
+        summary=reason,
+        reference_id=f"tool-disabled:{tool_name}",
+        source_query=None,
+        citation={
+            "tool_name": tool_name,
+            "status": "disabled",
+            "reason": reason,
+        },
+    )
 
 
 def _confidence_for_report(
@@ -645,6 +772,8 @@ def _diagnose_with_llm(
     try:
         llm_response, usage = llm_client.complete(prompt)
     except Exception as exc:
+        if not isinstance(llm_client, NoopLLMClient):
+            raise LLMRuntimeError(str(exc)) from exc
         return None, LLMUsage(
             provider=getattr(llm_client, "provider", "unknown"),
             model=getattr(llm_client, "model", "unknown"),
@@ -729,6 +858,20 @@ def _diagnose_from_evidence(
         ["expired card", "expired cards", "card expiration", "payment method"],
     )
     has_retry_webhook_failure = "retry webhook" in invoice_failure_text
+
+    if revenue_metrics.get("tool_disabled"):
+        return Diagnosis(
+            root_cause=(
+                "MRR dropped, but the available evidence does not prove a specific "
+                "operational root cause."
+            ),
+            next_actions=[
+                "Collect revenue metrics before naming a root cause.",
+                "Review account records and support tickets for affected accounts.",
+                "Keep any customer follow-up in approval-gated drafts.",
+            ],
+            is_specific=False,
+        )
 
     if has_failed_invoices and has_context and has_card_expiration_failure:
         return Diagnosis(

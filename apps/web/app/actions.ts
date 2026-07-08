@@ -1,17 +1,25 @@
 'use server';
 
 import { redirect } from 'next/navigation';
+import { cookies } from 'next/headers';
 
 import {
   approveApprovalRequest,
   createAgentVersion,
   createIncidentFromAnomaly,
+  getAgentVersionDetail,
   publishAgentVersion as apiPublishAgentVersion,
   rejectApprovalRequest,
   runEvalSuite,
   startInvestigation,
   updateAgentVersion,
 } from '@/lib/api';
+import {
+  VERSION_DETAIL_OPERATOR_COOKIE,
+  VERSION_DETAIL_OPERATOR_COOKIE_MAX_AGE_SECONDS,
+  agentVersionPath,
+} from '@/lib/demoOperatorCookie';
+import { resolveDemoOperatorToken } from '@/lib/demoOperatorToken';
 
 export async function openIncidentFromAnomaly(formData: FormData) {
   const anomalyId = formData.get('anomaly_id');
@@ -19,7 +27,7 @@ export async function openIncidentFromAnomaly(formData: FormData) {
     throw new Error('Missing anomaly id');
   }
 
-  const incident = await createIncidentFromAnomaly(anomalyId, demoOperatorOptions());
+  const incident = await createIncidentFromAnomaly(anomalyId, await demoOperatorOptions(formData));
   if (!incident.ok) {
     redirect(`/?incident_error=${encodeURIComponent(incident.error)}`);
   }
@@ -34,7 +42,7 @@ export async function startInvestigationFromIncident(formData: FormData) {
   const encodedIncidentId = encodeURIComponent(incidentId);
   const options: { runInline: boolean; demoOperatorToken?: string; agentVersionId?: string } = {
     runInline: true,
-    ...demoOperatorOptions(),
+    ...(await demoOperatorOptions(formData)),
   };
   if (typeof agentVersionId === 'string' && agentVersionId.length > 0) {
     options.agentVersionId = agentVersionId;
@@ -53,7 +61,7 @@ export async function approveApprovalFromRun(formData: FormData) {
   const result = await approveApprovalRequest(
     approvalId,
     'Approved from the investigation approval queue.',
-    demoOperatorOptions(),
+    await demoOperatorOptions(formData),
   );
 
   redirectToRun(runId, result.ok ? undefined : result.error);
@@ -65,7 +73,7 @@ export async function rejectApprovalFromRun(formData: FormData) {
   const result = await rejectApprovalRequest(
     approvalId,
     'Rejected from the investigation approval queue.',
-    demoOperatorOptions(),
+    await demoOperatorOptions(formData),
   );
 
   redirectToRun(runId, result.ok ? undefined : result.error);
@@ -76,7 +84,7 @@ export async function approveApprovalFromQueue(formData: FormData) {
   const result = await approveApprovalRequest(
     approvalId,
     'Approved from the global approvals queue.',
-    demoOperatorOptions(),
+    await demoOperatorOptions(formData),
   );
 
   redirectToApprovals(result.ok ? undefined : result.error);
@@ -87,14 +95,19 @@ export async function rejectApprovalFromQueue(formData: FormData) {
   const result = await rejectApprovalRequest(
     approvalId,
     'Rejected from the global approvals queue.',
-    demoOperatorOptions(),
+    await demoOperatorOptions(formData),
   );
 
   redirectToApprovals(result.ok ? undefined : result.error);
 }
 
-export async function runEvalSuiteFromReport() {
-  const result = await runEvalSuite();
+export async function runEvalSuiteFromReport(formData: FormData) {
+  const evalRunToken = formData.get('eval_run_token');
+  const result = await runEvalSuite(
+    typeof evalRunToken === 'string' && evalRunToken.length > 0
+      ? evalRunToken
+      : undefined,
+  );
   if (!result.ok) {
     redirect(`/evals?eval_error=${encodeURIComponent(result.error)}`);
   }
@@ -119,6 +132,7 @@ export async function saveAgentVersionDraft(formData: FormData) {
   const temperatureRaw = formData.get('temperature');
   const maxTokensRaw = formData.get('max_tokens');
   const toolsPresent = formData.get('enabled_tool_ids_present');
+  const systemPromptPresent = formData.has('system_prompt');
   const returnTo = formData.get('return_to');
 
   const returnPath =
@@ -147,7 +161,10 @@ export async function saveAgentVersionDraft(formData: FormData) {
   }
 
   const versionInput = {
-    system_prompt: typeof systemPrompt === 'string' && systemPrompt.length > 0 ? systemPrompt : undefined,
+    system_prompt:
+      systemPromptPresent && typeof systemPrompt === 'string'
+        ? systemPrompt
+        : undefined,
     model: typeof model === 'string' && model.length > 0 ? model : undefined,
     temperature,
     max_tokens: maxTokens,
@@ -156,16 +173,22 @@ export async function saveAgentVersionDraft(formData: FormData) {
 
   let result;
   if (typeof versionId === 'string' && versionId.length > 0) {
-    result = await updateAgentVersion(agentId, versionId, versionInput, demoOperatorOptions());
+    result = await updateAgentVersion(
+      agentId,
+      versionId,
+      versionInput,
+      await demoOperatorOptions(formData, agentId, versionId),
+    );
   } else {
+    const sourceVersionId =
+      typeof baseVersionId === 'string' && baseVersionId.length > 0 ? baseVersionId : undefined;
     result = await createAgentVersion(
       agentId,
       {
-        fork_from_version_id:
-          typeof baseVersionId === 'string' && baseVersionId.length > 0 ? baseVersionId : undefined,
+        fork_from_version_id: sourceVersionId,
         ...versionInput,
       },
-      demoOperatorOptions(),
+      await demoOperatorOptions(formData, agentId, sourceVersionId),
     );
   }
 
@@ -184,7 +207,11 @@ export async function publishAgentVersion(formData: FormData) {
   const versionId = readRequiredFormValue(formData, 'version_id');
   const agentId = readRequiredFormValue(formData, 'agent_id');
 
-  const result = await apiPublishAgentVersion(agentId, versionId, demoOperatorOptions());
+  const result = await apiPublishAgentVersion(
+    agentId,
+    versionId,
+    await demoOperatorOptions(formData, agentId, versionId),
+  );
 
   if (!result.ok) {
     redirect(
@@ -195,6 +222,31 @@ export async function publishAgentVersion(formData: FormData) {
   redirect(`/agents/${encodeURIComponent(agentId)}?version_published=${encodeURIComponent(versionId)}`);
 }
 
+export async function unlockAgentVersionDetail(formData: FormData) {
+  const agentId = readRequiredFormValue(formData, 'agent_id');
+  const versionId = readRequiredFormValue(formData, 'version_id');
+  const operatorToken = readRequiredFormValue(formData, 'operator_token');
+  const returnPath = agentVersionPath(agentId, versionId);
+
+  const detail = await getAgentVersionDetail(agentId, versionId, {
+    demoOperatorToken: operatorToken,
+  });
+  if (!detail.ok) {
+    redirect(`${returnPath}?version_error=${encodeURIComponent(detail.error)}`);
+  }
+
+  const cookieStore = await cookies();
+  cookieStore.set(VERSION_DETAIL_OPERATOR_COOKIE, operatorToken, {
+    httpOnly: true,
+    sameSite: 'strict',
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: VERSION_DETAIL_OPERATOR_COOKIE_MAX_AGE_SECONDS,
+    path: returnPath,
+  });
+
+  redirect(`${returnPath}?detail_unlocked=1`);
+}
+
 function readRequiredFormValue(formData: FormData, key: string) {
   const value = formData.get(key);
   if (typeof value !== 'string' || value.length === 0) {
@@ -203,9 +255,20 @@ function readRequiredFormValue(formData: FormData, key: string) {
   return value;
 }
 
-function demoOperatorOptions() {
+async function demoOperatorOptions(
+  formData: FormData,
+  agentId?: string,
+  versionId?: string,
+) {
+  const operatorToken = formData.get('operator_token');
+  let cookieToken: string | undefined;
+  if (agentId && versionId) {
+    const cookieStore = await cookies();
+    const cookie = cookieStore.get(VERSION_DETAIL_OPERATOR_COOKIE);
+    cookieToken = cookie?.value;
+  }
   return {
-    demoOperatorToken: process.env.DEMO_OPERATOR_TOKEN,
+    demoOperatorToken: resolveDemoOperatorToken(operatorToken, cookieToken),
   };
 }
 

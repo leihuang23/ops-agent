@@ -46,6 +46,7 @@ class QueryRevenueMetricsOutput(BaseModel):
 class FetchAccountDetailsInput(BaseModel):
     account_ids: list[str] = Field(default_factory=list)
     invoice_ids: list[str] = Field(default_factory=list)
+    include_invoices: bool = True
 
 
 class AccountInvoiceEvidence(BaseModel):
@@ -265,12 +266,14 @@ def fetch_account_details(
         subscription.account_id: subscription for subscription in subscriptions
     }
 
-    invoice_query = select(Invoice).where(Invoice.account_id.in_(payload.account_ids))
-    if payload.invoice_ids:
-        invoice_query = invoice_query.where(Invoice.id.in_(payload.invoice_ids))
-    invoices = session.scalars(
-        invoice_query.order_by(Invoice.account_id, Invoice.invoice_date.desc(), Invoice.id)
-    ).all()
+    invoices = []
+    if payload.include_invoices:
+        invoice_query = select(Invoice).where(Invoice.account_id.in_(payload.account_ids))
+        if payload.invoice_ids:
+            invoice_query = invoice_query.where(Invoice.id.in_(payload.invoice_ids))
+        invoices = session.scalars(
+            invoice_query.order_by(Invoice.account_id, Invoice.invoice_date.desc(), Invoice.id)
+        ).all()
     invoices_by_account: dict[str, list[Invoice]] = {}
     for invoice in invoices:
         invoices_by_account.setdefault(invoice.account_id, []).append(invoice)

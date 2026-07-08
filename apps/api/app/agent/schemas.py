@@ -27,7 +27,7 @@ class ReportAffectedAccount(BaseModel):
 
 
 class ReportEvidence(BaseModel):
-    kind: Literal["sql", "document", "ticket"]
+    kind: Literal["sql", "document", "ticket", "tool"]
     title: str
     summary: str
     reference_id: str

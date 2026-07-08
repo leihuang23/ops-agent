@@ -1,4 +1,4 @@
-import { resolveApiBaseUrl } from './resolveApiBaseUrl';
+import { resolveApiBaseUrl } from './resolveApiBaseUrl.ts';
 
 export type HealthResponse = {
   status: string;
@@ -340,7 +340,7 @@ export type ReportAffectedAccount = {
 };
 
 export type ReportEvidence = {
-  kind: 'sql' | 'document' | 'ticket';
+  kind: 'sql' | 'document' | 'ticket' | 'tool';
   title: string;
   summary: string;
   reference_id: string;
@@ -623,6 +623,9 @@ export type PublishResult = {
   version: AgentVersionDetail;
 };
 
+export type AgentVersionPageData = AgentVersionSummary &
+  Partial<Pick<AgentVersionDetail, 'system_prompt' | 'temperature' | 'max_tokens' | 'enabled_tool_ids' | 'allowed_scopes' | 'published_by'>>;
+
 export type AgentCreateInput = {
   id: string;
   name: string;
@@ -664,6 +667,10 @@ export type AgentVersionListResult =
 
 export type AgentVersionDetailResult =
   | { ok: true; data: AgentVersionDetail }
+  | { ok: false; error: string };
+
+export type AgentVersionPageResult =
+  | { ok: true; data: AgentVersionPageData }
   | { ok: false; error: string };
 
 export type PublishVersionResult =
@@ -1012,11 +1019,11 @@ export async function getAgentRun(runId: string): Promise<AgentRunDetailResult> 
   }
 }
 
-export async function runEvalSuite(): Promise<EvalRunResult> {
+export async function runEvalSuite(evalRunToken?: string): Promise<EvalRunResult> {
   try {
     const headers: HeadersInit = {};
-    if (process.env.EVAL_RUN_TOKEN) {
-      headers['X-Eval-Run-Token'] = process.env.EVAL_RUN_TOKEN;
+    if (evalRunToken) {
+      headers['X-Eval-Run-Token'] = evalRunToken;
     }
 
     const response = await fetch(`${resolveApiBaseUrl()}/evals/run`, {
@@ -1377,11 +1384,46 @@ export async function listAgentVersions(
 export async function getAgentVersion(
   agentId: string,
   versionId: string,
+): Promise<AgentVersionPageResult> {
+  try {
+    const response = await fetch(
+      `${resolveApiBaseUrl()}/agents/${encodeURIComponent(agentId)}/versions/${encodeURIComponent(versionId)}/summary`,
+      {
+        cache: 'no-store',
+      },
+    );
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        error: `Version endpoint returned HTTP ${response.status}`,
+      };
+    }
+
+    return {
+      ok: true,
+      data: (await response.json()) as AgentVersionSummary,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : 'Version endpoint unavailable',
+    };
+  }
+}
+
+export async function getAgentVersionDetail(
+  agentId: string,
+  versionId: string,
+  options: DemoOperatorOptions = {},
 ): Promise<AgentVersionDetailResult> {
   try {
     const response = await fetch(
       `${resolveApiBaseUrl()}/agents/${encodeURIComponent(agentId)}/versions/${encodeURIComponent(versionId)}`,
-      { cache: 'no-store' },
+      {
+        headers: demoOperatorHeaders(options.demoOperatorToken),
+        cache: 'no-store',
+      },
     );
 
     if (!response.ok) {

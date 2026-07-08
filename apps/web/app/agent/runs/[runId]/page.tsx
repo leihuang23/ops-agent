@@ -62,6 +62,22 @@ function RunReport({
 }) {
   const report = run.final_report;
   const runIsActive = !run.is_stale && (run.status === 'queued' || run.status === 'running');
+  const llmProvider =
+    typeof run.trace_metadata?.llm_provider === 'string'
+      ? run.trace_metadata.llm_provider
+      : 'n/a';
+  const llmModel =
+    typeof run.trace_metadata?.llm_model === 'string'
+      ? run.trace_metadata.llm_model
+      : (run.agent_version?.model ?? 'n/a');
+  const llmUsed =
+    typeof run.trace_metadata?.llm_used === 'boolean'
+      ? run.trace_metadata.llm_used
+      : null;
+  const llmFallbackReason =
+    typeof run.trace_metadata?.llm_fallback_reason === 'string'
+      ? run.trace_metadata.llm_fallback_reason
+      : null;
 
   return (
     <main className="dashboard-shell">
@@ -129,10 +145,20 @@ function RunReport({
         </div>
         <div>
           <span className="label">Model</span>
+          <strong>{llmModel}</strong>
+        </div>
+        <div>
+          <span className="label">LLM provider</span>
+          <strong>{llmProvider}</strong>
+        </div>
+        <div>
+          <span className="label">LLM status</span>
           <strong>
-            {run.agent_version?.model ??
-              (typeof run.trace_metadata?.llm_model === 'string' ? run.trace_metadata.llm_model : 'n/a')}
+            {llmUsed === null ? 'not recorded' : llmUsed ? 'used LLM' : 'fallback'}
           </strong>
+          {llmFallbackReason ? (
+            <span className="token-breakdown"> ({llmFallbackReason})</span>
+          ) : null}
         </div>
         <div>
           <span className="label">Trace</span>
@@ -338,6 +364,13 @@ function ApprovalQueuePanel({
                       <form action={approveApprovalFromRun}>
                         <input name="approval_id" type="hidden" value={action.approval_request.id} />
                         <input name="run_id" type="hidden" value={runId} />
+                        <input
+                          name="operator_token"
+                          type="password"
+                          className="field-input"
+                          placeholder="Operator token"
+                          autoComplete="off"
+                        />
                         <button className="action-button" type="submit">
                           Approve
                         </button>
@@ -345,6 +378,13 @@ function ApprovalQueuePanel({
                       <form action={rejectApprovalFromRun}>
                         <input name="approval_id" type="hidden" value={action.approval_request.id} />
                         <input name="run_id" type="hidden" value={runId} />
+                        <input
+                          name="operator_token"
+                          type="password"
+                          className="field-input"
+                          placeholder="Operator token"
+                          autoComplete="off"
+                        />
                         <button className="action-button secondary-action" type="submit">
                           Reject
                         </button>

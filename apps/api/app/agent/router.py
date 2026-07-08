@@ -48,6 +48,7 @@ def start_investigation(
                 db,
                 payload.incident_id,
                 force=payload.force,
+                idempotency_key=payload.idempotency_key,
                 agent_version_id=payload.agent_version_id,
             )
         else:

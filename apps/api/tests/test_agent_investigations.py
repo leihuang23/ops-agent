@@ -20,10 +20,12 @@ from app.agent.schemas import (
 )
 from app.agent.persistence import AgentRunRecorder, utcnow_naive
 from app.agents.service import DEFAULT_AGENT_ID, DEFAULT_AGENT_VERSION_ID
+from app.core.config import get_settings
 from app.db.base import Base
 from app.db.session import get_db
+from app.llm.schemas import LLMResponse, LLMUsage
 from app.main import app
-from app.models import AgentRun, AgentRunStep, Incident
+from app.models import AgentRun, AgentRunStep, AgentVersion, Incident
 from app.seed import reseed_database
 
 
@@ -598,7 +600,7 @@ def test_concurrent_executors_claim_queued_run_once(
         assert run.status == "succeeded"
 
 
-def test_database_rejects_two_active_runs_for_one_incident(
+def test_database_rejects_two_active_runs_for_same_incident_and_version(
     session_factory: Callable[[], Session],
 ) -> None:
     with session_factory() as session:
@@ -648,6 +650,78 @@ def test_database_rejects_two_active_runs_for_one_incident(
             session.commit()
 
 
+def test_database_allows_active_runs_for_different_versions(
+    session_factory: Callable[[], Session],
+) -> None:
+    with session_factory() as session:
+        reseed_database(session)
+        incident_id = session.scalar(select(Incident.id))
+        assert incident_id is not None
+        now = utcnow_naive()
+        second_version = AgentVersion(
+            id="revenue-ops-agent_v2_test",
+            agent_id=DEFAULT_AGENT_ID,
+            version_number=2,
+            semantic_version="2.0.0",
+            status="published",
+            system_prompt="",
+            model="gpt-4o-mini",
+            temperature=0.1,
+            max_tokens=1024,
+            enabled_tool_ids=[
+                "query_revenue_metrics",
+                "fetch_account_details",
+                "search_docs",
+                "fetch_support_tickets",
+            ],
+            allowed_scopes=[],
+            published_at=now,
+            published_by="test",
+            forked_from_version_id=DEFAULT_AGENT_VERSION_ID,
+            created_at=now,
+            updated_at=now,
+        )
+        first_run = AgentRun(
+            id="run_active_one",
+            incident_id=incident_id,
+            agent_id=DEFAULT_AGENT_ID,
+            agent_version_id=DEFAULT_AGENT_VERSION_ID,
+            status="queued",
+            trace_id=None,
+            input_payload={"incident_id": incident_id},
+            final_report=None,
+            token_estimate=0,
+            cost_estimate_usd=0.0,
+            error=None,
+            started_at=None,
+            completed_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+        second_run = AgentRun(
+            id="run_active_two",
+            incident_id=incident_id,
+            agent_id=DEFAULT_AGENT_ID,
+            agent_version_id=second_version.id,
+            status="running",
+            trace_id="local-test-trace",
+            input_payload={"incident_id": incident_id},
+            final_report=None,
+            token_estimate=0,
+            cost_estimate_usd=0.0,
+            error=None,
+            started_at=now,
+            completed_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(second_version)
+        session.add(first_run)
+        session.add(second_run)
+
+        session.commit()
+
+
 def test_investigation_fails_visibly_when_action_proposal_fails(
     session_factory: Callable[[], Session],
     monkeypatch: pytest.MonkeyPatch,
@@ -691,6 +765,110 @@ def test_investigation_fails_visibly_when_action_proposal_fails(
     )
     assert failed_step["status"] == "failed"
     assert "mock action proposal unavailable" in failed_step["error"]
+
+
+def test_investigation_fails_visibly_when_llm_model_provider_mismatches(
+    session_factory: Callable[[], Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    get_settings.cache_clear()
+
+    with session_factory() as session:
+        reseed_database(session)
+        incident_id = session.scalar(select(Incident.id))
+
+    assert incident_id is not None
+
+    def override_get_db() -> Generator[Session, None, None]:
+        with session_factory() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+    client = TestClient(app)
+    try:
+        version_resp = client.post(
+            "/agents/revenue-ops-agent/versions",
+            json={"model": "claude-sonnet-5"},
+        )
+        assert version_resp.status_code == 201
+        version_id = version_resp.json()["id"]
+        publish_resp = client.post(
+            f"/agents/revenue-ops-agent/versions/{version_id}/publish"
+        )
+        assert publish_resp.status_code == 200
+        response = client.post(
+            "/agent/investigations",
+            json={
+                "incident_id": incident_id,
+                "run_inline": True,
+                "force": True,
+                "agent_version_id": version_id,
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+        get_settings.cache_clear()
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["status"] == "failed"
+    assert payload["final_report"] is None
+    assert "LLM provider/model mismatch" in payload["error"]
+    assert "model=claude-sonnet-5" in payload["error"]
+    assert payload["trace_metadata"]["llm_provider"] == "openai"
+    assert payload["trace_metadata"]["llm_model"] == "claude-sonnet-5"
+    assert payload["trace_metadata"]["llm_used"] is False
+    assert "llm_configuration_error" in payload["trace_metadata"]["llm_fallback_reason"]
+
+
+def test_investigation_fails_visibly_when_enabled_llm_provider_errors(
+    session_factory: Callable[[], Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ErrorLLMClient:
+        provider = "openai"
+        model = "gpt-4o-mini"
+
+        def complete(self, prompt: str) -> tuple[LLMResponse, LLMUsage]:
+            raise RuntimeError("provider unavailable")
+
+    with session_factory() as session:
+        reseed_database(session)
+        incident_id = session.scalar(select(Incident.id))
+
+    assert incident_id is not None
+
+    monkeypatch.setattr(
+        "app.agent.service.build_llm_client_for_version",
+        lambda _version_config: ErrorLLMClient(),
+    )
+
+    def override_get_db() -> Generator[Session, None, None]:
+        with session_factory() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/agent/investigations",
+            json={"incident_id": incident_id, "run_inline": True, "force": True},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["status"] == "failed"
+    assert payload["final_report"] is None
+    assert "provider unavailable" in payload["error"]
+    assert payload["trace_metadata"]["llm_provider"] == "openai"
+    assert payload["trace_metadata"]["llm_model"] == "gpt-4o-mini"
+    assert payload["trace_metadata"]["llm_used"] is False
+    assert "llm_runtime_error" in payload["trace_metadata"]["llm_fallback_reason"]
 
 
 def test_investigation_start_reuses_existing_successful_run_by_default(
@@ -893,6 +1071,7 @@ def test_failed_tool_call_is_persisted_and_surfaced(
     assert payload["status"] == "failed"
     assert "support ticket store unavailable" in payload["error"]
     assert payload["final_report"] is None
+    assert "llm_fallback_reason" not in payload["trace_metadata"]
 
     failed_step = next(
         step for step in payload["steps"] if step["tool_name"] == "fetch_support_tickets"
@@ -905,6 +1084,279 @@ def test_failed_tool_call_is_persisted_and_surfaced(
     persisted_payload = persisted_response.json()
     assert persisted_payload["id"] == run_id
     assert persisted_payload["steps"][-1]["status"] == "failed"
+    assert "llm_fallback_reason" not in persisted_payload["trace_metadata"]
+
+
+def test_disabled_tools_do_not_create_metric_evidence(
+    session_factory: Callable[[], Session],
+) -> None:
+    with session_factory() as session:
+        reseed_database(session)
+        incident_id = session.scalar(select(Incident.id))
+
+    assert incident_id is not None
+
+    def override_get_db() -> Generator[Session, None, None]:
+        with session_factory() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+    client = TestClient(app)
+    try:
+        version_resp = client.post(
+            "/agents/revenue-ops-agent/versions",
+            json={
+                "enabled_tool_ids": [
+                    "fetch_account_details",
+                    "search_docs",
+                ]
+            },
+        )
+        assert version_resp.status_code == 201
+        version_id = version_resp.json()["id"]
+        publish_resp = client.post(
+            f"/agents/revenue-ops-agent/versions/{version_id}/publish"
+        )
+        assert publish_resp.status_code == 200
+        response = client.post(
+            "/agent/investigations",
+            json={
+                "incident_id": incident_id,
+                "run_inline": True,
+                "force": True,
+                "agent_version_id": version_id,
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 201
+    payload = response.json()
+    disabled_step = next(
+        step for step in payload["steps"] if step["tool_name"] == "query_revenue_metrics"
+    )
+    assert disabled_step["status"] == "succeeded"
+    assert disabled_step["outputs"]["tool_disabled"] is True
+    assert disabled_step["outputs"]["sql_evidence"] == []
+    assert disabled_step["outputs"]["metric_evidence"]["failed_invoice_count"] == 0
+    account_step = next(
+        step for step in payload["steps"] if step["tool_name"] == "fetch_account_details"
+    )
+    assert account_step["inputs"]["account_ids"]
+    assert account_step["inputs"]["include_invoices"] is False
+    assert all(
+        account["failed_invoices"] == []
+        for account in account_step["outputs"]["accounts"]
+    )
+    assert all(
+        account["failed_invoice_cents"] == 0
+        and account["failed_invoice_ids"] == []
+        for account in payload["final_report"]["affected_accounts"]
+    )
+    assert payload["final_report"]["cited_evidence"]
+    assert all(
+        item["kind"] != "sql" for item in payload["final_report"]["cited_evidence"]
+    )
+    tool_disabled_refs = {
+        item["reference_id"]
+        for item in payload["final_report"]["cited_evidence"]
+        if item["kind"] == "tool"
+    }
+    assert tool_disabled_refs == {
+        "tool-disabled:query_revenue_metrics",
+        "tool-disabled:fetch_support_tickets",
+    }
+    assert "failed renewal" not in payload["final_report"]["root_cause"].lower()
+    assert "failed renewal evidence" not in payload["final_report"]["summary"].lower()
+    assert all(
+        "failed renewal evidence" not in claim["text"].lower()
+        for claim in payload["final_report"]["claims"]
+    )
+    assert all(
+        set(claim["citation_refs"]) == tool_disabled_refs
+        for claim in payload["final_report"]["claims"]
+        if claim["category"] in {"root_cause", "impact", "uncertainty"}
+    )
+    assert payload["final_report"]["confidence"] != "high"
+
+
+def test_disabled_context_tools_create_tool_evidence(
+    session_factory: Callable[[], Session],
+) -> None:
+    with session_factory() as session:
+        reseed_database(session)
+        incident_id = session.scalar(select(Incident.id))
+
+    assert incident_id is not None
+
+    def override_get_db() -> Generator[Session, None, None]:
+        with session_factory() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+    client = TestClient(app)
+    try:
+        version_resp = client.post(
+            "/agents/revenue-ops-agent/versions",
+            json={
+                "enabled_tool_ids": [
+                    "query_revenue_metrics",
+                    "fetch_account_details",
+                ]
+            },
+        )
+        assert version_resp.status_code == 201
+        version_id = version_resp.json()["id"]
+        publish_resp = client.post(
+            f"/agents/revenue-ops-agent/versions/{version_id}/publish"
+        )
+        assert publish_resp.status_code == 200
+        response = client.post(
+            "/agent/investigations",
+            json={
+                "incident_id": incident_id,
+                "run_inline": True,
+                "force": True,
+                "agent_version_id": version_id,
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 201
+    payload = response.json()
+    report = payload["final_report"]
+    tool_disabled_refs = {
+        item["reference_id"]
+        for item in report["cited_evidence"]
+        if item["kind"] == "tool"
+    }
+    assert tool_disabled_refs == {
+        "tool-disabled:search_docs",
+        "tool-disabled:fetch_support_tickets",
+    }
+    uncertainty_claim = next(
+        claim for claim in report["claims"] if claim["category"] == "uncertainty"
+    )
+    assert set(uncertainty_claim["citation_refs"]) == tool_disabled_refs
+
+
+def test_single_disabled_context_tool_is_cited_by_a_claim(
+    session_factory: Callable[[], Session],
+) -> None:
+    with session_factory() as session:
+        reseed_database(session)
+        incident_id = session.scalar(select(Incident.id))
+
+    assert incident_id is not None
+
+    def override_get_db() -> Generator[Session, None, None]:
+        with session_factory() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+    client = TestClient(app)
+    try:
+        version_resp = client.post(
+            "/agents/revenue-ops-agent/versions",
+            json={
+                "enabled_tool_ids": [
+                    "query_revenue_metrics",
+                    "fetch_account_details",
+                    "fetch_support_tickets",
+                ]
+            },
+        )
+        assert version_resp.status_code == 201
+        version_id = version_resp.json()["id"]
+        publish_resp = client.post(
+            f"/agents/revenue-ops-agent/versions/{version_id}/publish"
+        )
+        assert publish_resp.status_code == 200
+        response = client.post(
+            "/agent/investigations",
+            json={
+                "incident_id": incident_id,
+                "run_inline": True,
+                "force": True,
+                "agent_version_id": version_id,
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["status"] == "succeeded"
+    report = payload["final_report"]
+    disabled_ref = "tool-disabled:search_docs"
+    assert any(
+        item["reference_id"] == disabled_ref and item["kind"] == "tool"
+        for item in report["cited_evidence"]
+    )
+    cited_by_claims = {
+        ref for claim in report["claims"] for ref in claim["citation_refs"]
+    }
+    assert disabled_ref in cited_by_claims
+
+
+def test_disabled_account_details_tool_is_cited_by_report(
+    session_factory: Callable[[], Session],
+) -> None:
+    with session_factory() as session:
+        reseed_database(session)
+        incident_id = session.scalar(select(Incident.id))
+
+    assert incident_id is not None
+
+    def override_get_db() -> Generator[Session, None, None]:
+        with session_factory() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+    client = TestClient(app)
+    try:
+        version_resp = client.post(
+            "/agents/revenue-ops-agent/versions",
+            json={
+                "enabled_tool_ids": [
+                    "query_revenue_metrics",
+                    "search_docs",
+                    "fetch_support_tickets",
+                ]
+            },
+        )
+        assert version_resp.status_code == 201
+        version_id = version_resp.json()["id"]
+        publish_resp = client.post(
+            f"/agents/revenue-ops-agent/versions/{version_id}/publish"
+        )
+        assert publish_resp.status_code == 200
+        response = client.post(
+            "/agent/investigations",
+            json={
+                "incident_id": incident_id,
+                "run_inline": True,
+                "force": True,
+                "agent_version_id": version_id,
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["status"] == "succeeded"
+    report = payload["final_report"]
+    disabled_ref = "tool-disabled:fetch_account_details"
+    assert any(
+        item["reference_id"] == disabled_ref and item["kind"] == "tool"
+        for item in report["cited_evidence"]
+    )
+    cited_by_claims = {
+        ref for claim in report["claims"] for ref in claim["citation_refs"]
+    }
+    assert disabled_ref in cited_by_claims
 
 
 def sample_report() -> InvestigationReport:
@@ -977,7 +1429,7 @@ def test_list_agent_runs_returns_runs_sorted_by_created_desc(
     assert created_at_values == sorted(created_at_values, reverse=True)
 
 
-def test_investigation_create_respects_idempotency_key(
+def test_idempotency_key_separates_explicit_and_default_version_selectors(
     session_factory: Callable[[], Session],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1011,12 +1463,213 @@ def test_investigation_create_respects_idempotency_key(
             json={
                 "incident_id": incident_id,
                 "idempotency_key": idempotency_key,
+                "agent_version_id": DEFAULT_AGENT_VERSION_ID,
             },
         )
         second = client.post(
             "/agent/investigations",
             json={
                 "incident_id": incident_id,
+                "idempotency_key": idempotency_key,
+                "force": True,
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert first.json()["id"] != second.json()["id"]
+    assert first.json()["agent_version_id"] == DEFAULT_AGENT_VERSION_ID
+    assert second.json()["agent_version_id"] == DEFAULT_AGENT_VERSION_ID
+
+
+def test_default_version_idempotency_key_is_stable_across_new_publish(
+    session_factory: Callable[[], Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with session_factory() as session:
+        reseed_database(session)
+        incident_id = session.scalar(select(Incident.id))
+
+    assert incident_id is not None
+
+    def override_get_db() -> Generator[Session, None, None]:
+        with session_factory() as db:
+            yield db
+
+    def execute_with_test_session(run_id: str) -> None:
+        from app.agent.service import execute_investigation_run_with_session
+
+        with session_factory() as db:
+            execute_investigation_run_with_session(db, run_id)
+
+    monkeypatch.setattr(
+        "app.agent.router._enqueue_investigation",
+        execute_with_test_session,
+    )
+
+    app.dependency_overrides[get_db] = override_get_db
+    client = TestClient(app)
+    idempotency_key = "idem-default-publish-drift"
+    try:
+        first = client.post(
+            "/agent/investigations",
+            json={
+                "incident_id": incident_id,
+                "idempotency_key": idempotency_key,
+            },
+        )
+        version_resp = client.post(
+            "/agents/revenue-ops-agent/versions",
+            json={"system_prompt": "New default after first request"},
+        )
+        assert version_resp.status_code == 201
+        version_id = version_resp.json()["id"]
+        publish_resp = client.post(
+            f"/agents/revenue-ops-agent/versions/{version_id}/publish"
+        )
+        assert publish_resp.status_code == 200
+        second = client.post(
+            "/agent/investigations",
+            json={
+                "incident_id": incident_id,
+                "idempotency_key": idempotency_key,
+                "force": True,
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert first.status_code == 201
+    assert second.status_code == 200
+    first_payload = first.json()
+    second_payload = second.json()
+    assert second_payload["id"] == first_payload["id"]
+    assert first_payload["agent_version_id"] == DEFAULT_AGENT_VERSION_ID
+    assert second_payload["agent_version_id"] == DEFAULT_AGENT_VERSION_ID
+
+
+def test_idempotency_key_does_not_reuse_different_agent_version(
+    session_factory: Callable[[], Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with session_factory() as session:
+        reseed_database(session)
+        incident_id = session.scalar(select(Incident.id))
+
+    assert incident_id is not None
+
+    def override_get_db() -> Generator[Session, None, None]:
+        with session_factory() as db:
+            yield db
+
+    def execute_with_test_session(run_id: str) -> None:
+        from app.agent.service import execute_investigation_run_with_session
+
+        with session_factory() as db:
+            execute_investigation_run_with_session(db, run_id)
+
+    monkeypatch.setattr(
+        "app.agent.router._enqueue_investigation",
+        execute_with_test_session,
+    )
+
+    app.dependency_overrides[get_db] = override_get_db
+    client = TestClient(app)
+    try:
+        version_resp = client.post(
+            "/agents/revenue-ops-agent/versions",
+            json={
+                "system_prompt": "Different version",
+                "enabled_tool_ids": [
+                    "query_revenue_metrics",
+                    "fetch_account_details",
+                    "search_docs",
+                    "fetch_support_tickets",
+                ],
+            },
+        )
+        assert version_resp.status_code == 201
+        version_id = version_resp.json()["id"]
+        publish_resp = client.post(
+            f"/agents/revenue-ops-agent/versions/{version_id}/publish"
+        )
+        assert publish_resp.status_code == 200
+        idempotency_key = "idem-cross-version"
+        first = client.post(
+            "/agent/investigations",
+            json={
+                "incident_id": incident_id,
+                "idempotency_key": idempotency_key,
+                "agent_version_id": DEFAULT_AGENT_VERSION_ID,
+            },
+        )
+        second = client.post(
+            "/agent/investigations",
+            json={
+                "incident_id": incident_id,
+                "idempotency_key": idempotency_key,
+                "agent_version_id": version_id,
+            },
+        )
+        third = client.post(
+            "/agent/investigations",
+            json={
+                "incident_id": incident_id,
+                "idempotency_key": idempotency_key,
+                "agent_version_id": DEFAULT_AGENT_VERSION_ID,
+                "force": True,
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert third.status_code == 200
+    first_payload = first.json()
+    second_payload = second.json()
+    third_payload = third.json()
+    assert first_payload["id"] != second_payload["id"]
+    assert third_payload["id"] == first_payload["id"]
+    assert first_payload["agent_version_id"] == DEFAULT_AGENT_VERSION_ID
+    assert second_payload["agent_version_id"] == version_id
+    assert "system_prompt" not in second_payload["input_payload"]["agent_version"]
+
+
+def test_inline_force_respects_idempotency_key(
+    session_factory: Callable[[], Session],
+) -> None:
+    with session_factory() as session:
+        reseed_database(session)
+        incident_id = session.scalar(select(Incident.id))
+
+    assert incident_id is not None
+
+    def override_get_db() -> Generator[Session, None, None]:
+        with session_factory() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+    client = TestClient(app)
+    idempotency_key = "idem-inline-force"
+    try:
+        first = client.post(
+            "/agent/investigations",
+            json={
+                "incident_id": incident_id,
+                "run_inline": True,
+                "force": True,
+                "idempotency_key": idempotency_key,
+            },
+        )
+        second = client.post(
+            "/agent/investigations",
+            json={
+                "incident_id": incident_id,
+                "run_inline": True,
+                "force": True,
                 "idempotency_key": idempotency_key,
             },
         )
@@ -1026,6 +1679,46 @@ def test_investigation_create_respects_idempotency_key(
     assert first.status_code == 201
     assert second.status_code == 200
     assert first.json()["id"] == second.json()["id"]
+
+
+def test_run_detail_redacts_legacy_system_prompt_from_input_payload(
+    session_factory: Callable[[], Session],
+) -> None:
+    with session_factory() as session:
+        reseed_database(session)
+        incident = session.scalar(select(Incident))
+        assert incident is not None
+        run = _make_test_run(incident.id)
+        run.input_payload = {
+            "incident_id": incident.id,
+            "agent_version": {
+                "id": DEFAULT_AGENT_VERSION_ID,
+                "model": "gpt-4o-mini",
+                "system_prompt": "legacy prompt should stay private",
+            },
+        }
+        session.add(run)
+        session.commit()
+        run_id = run.id
+
+    def override_get_db() -> Generator[Session, None, None]:
+        with session_factory() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+    client = TestClient(app)
+    try:
+        first = client.get(f"/agent/runs/{run_id}")
+        second = client.get(f"/agent/runs/{run_id}")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    for response in (first, second):
+        agent_version_payload = response.json()["input_payload"]["agent_version"]
+        assert agent_version_payload["id"] == DEFAULT_AGENT_VERSION_ID
+        assert "system_prompt" not in agent_version_payload
 
 
 def _make_test_run(incident_id: str) -> AgentRun:

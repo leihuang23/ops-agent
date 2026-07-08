@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Generator
+from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,6 +14,9 @@ from app.db.session import get_db
 from app.main import app
 from app.models import Agent, AgentVersion
 from app.seed import reseed_database
+from app.core.config import get_settings
+from app.agents.service import get_default_published_version
+from app.agent.persistence import utcnow_naive
 
 
 @pytest.fixture()
@@ -71,6 +75,60 @@ class TestAgentsList:
         assert "updated_at" in agent
         assert agent["version_count"] >= 1
 
+    def test_list_agents_latest_published_version_treats_null_number_as_older(
+        self,
+        client: TestClient,
+        session_factory: Callable[[], Session],
+    ) -> None:
+        with session_factory() as db_session:
+            now = utcnow_naive()
+            db_session.add_all(
+                [
+                    AgentVersion(
+                        id="revenue-ops-agent_list_legacy_null",
+                        agent_id="revenue-ops-agent",
+                        version_number=None,
+                        semantic_version=None,
+                        status="published",
+                        system_prompt="legacy null version",
+                        model="gpt-4o-mini",
+                        temperature=0.1,
+                        max_tokens=1024,
+                        enabled_tool_ids=["query_revenue_metrics"],
+                        allowed_scopes=[],
+                        published_at=now,
+                        published_by="test",
+                        forked_from_version_id="revenue-ops-agent_v1",
+                        created_at=now,
+                        updated_at=now,
+                    ),
+                    AgentVersion(
+                        id="revenue-ops-agent_list_v2",
+                        agent_id="revenue-ops-agent",
+                        version_number=2,
+                        semantic_version="2.0.0",
+                        status="published",
+                        system_prompt="v2",
+                        model="gpt-4o-mini",
+                        temperature=0.1,
+                        max_tokens=1024,
+                        enabled_tool_ids=["query_revenue_metrics"],
+                        allowed_scopes=[],
+                        published_at=now,
+                        published_by="test",
+                        forked_from_version_id="revenue-ops-agent_v1",
+                        created_at=now,
+                        updated_at=now,
+                    ),
+                ]
+            )
+            db_session.commit()
+
+        response = client.get("/agents")
+        assert response.status_code == 200
+        agent = next(a for a in response.json()["agents"] if a["id"] == "revenue-ops-agent")
+        assert agent["latest_published_version"]["id"] == "revenue-ops-agent_list_v2"
+
 
 class TestAgentDetail:
     def test_get_agent_detail_includes_versions(self, client: TestClient) -> None:
@@ -85,9 +143,132 @@ class TestAgentDetail:
         assert v1["semantic_version"] == "1.0.0"
         assert v1["model"] == "gpt-4o-mini"
 
+    def test_agent_detail_orders_legacy_null_published_versions_last(
+        self,
+        client: TestClient,
+        session_factory: Callable[[], Session],
+    ) -> None:
+        with session_factory() as db_session:
+            now = utcnow_naive()
+            db_session.add_all(
+                [
+                    AgentVersion(
+                        id="revenue-ops-agent_detail_legacy_null",
+                        agent_id="revenue-ops-agent",
+                        version_number=None,
+                        semantic_version=None,
+                        status="published",
+                        system_prompt="legacy null version",
+                        model="gpt-4o-mini",
+                        temperature=0.1,
+                        max_tokens=1024,
+                        enabled_tool_ids=["query_revenue_metrics"],
+                        allowed_scopes=[],
+                        published_at=now,
+                        published_by="test",
+                        forked_from_version_id="revenue-ops-agent_v1",
+                        created_at=now,
+                        updated_at=now,
+                    ),
+                    AgentVersion(
+                        id="revenue-ops-agent_detail_v2",
+                        agent_id="revenue-ops-agent",
+                        version_number=2,
+                        semantic_version="2.0.0",
+                        status="published",
+                        system_prompt="v2",
+                        model="gpt-4o-mini",
+                        temperature=0.1,
+                        max_tokens=1024,
+                        enabled_tool_ids=["query_revenue_metrics"],
+                        allowed_scopes=[],
+                        published_at=now,
+                        published_by="test",
+                        forked_from_version_id="revenue-ops-agent_v1",
+                        created_at=now,
+                        updated_at=now,
+                    ),
+                ]
+            )
+            db_session.commit()
+
+        response = client.get("/agents/revenue-ops-agent")
+        assert response.status_code == 200
+        body = response.json()
+        published = [v for v in body["versions"] if v["status"] == "published"]
+        assert body["latest_published_version"]["id"] == "revenue-ops-agent_detail_v2"
+        assert published[0]["id"] == "revenue-ops-agent_detail_v2"
+        assert published[-1]["id"] == "revenue-ops-agent_detail_legacy_null"
+
     def test_get_nonexistent_agent_returns_404(self, client: TestClient) -> None:
         response = client.get("/agents/nonexistent-agent")
         assert response.status_code == 404
+
+    def test_detail_and_default_draft_use_stable_null_version_recency(
+        self,
+        client: TestClient,
+        session_factory: Callable[[], Session],
+    ) -> None:
+        with session_factory() as db_session:
+            now = utcnow_naive()
+            agent = Agent(
+                id="null-only-agent",
+                name="Null Only Agent",
+                description="Legacy null version ordering",
+                default_model="gpt-4o-mini",
+                created_at=now,
+                updated_at=now,
+            )
+            older = AgentVersion(
+                id="null-only-agent_old_null",
+                agent_id=agent.id,
+                version_number=None,
+                semantic_version=None,
+                status="published",
+                system_prompt="older null source",
+                model="gpt-4o-mini",
+                temperature=0.1,
+                max_tokens=1024,
+                enabled_tool_ids=["query_revenue_metrics"],
+                allowed_scopes=[],
+                published_at=now,
+                published_by="test",
+                forked_from_version_id=None,
+                created_at=now,
+                updated_at=now,
+            )
+            newer = AgentVersion(
+                id="null-only-agent_new_null",
+                agent_id=agent.id,
+                version_number=None,
+                semantic_version=None,
+                status="published",
+                system_prompt="newer null source",
+                model="claude-sonnet-5",
+                temperature=0.2,
+                max_tokens=2048,
+                enabled_tool_ids=["query_revenue_metrics", "search_docs"],
+                allowed_scopes=[],
+                published_at=now + timedelta(seconds=1),
+                published_by="test",
+                forked_from_version_id=None,
+                created_at=now + timedelta(seconds=1),
+                updated_at=now + timedelta(seconds=1),
+            )
+            db_session.add_all([agent, older, newer])
+            db_session.commit()
+
+        detail_resp = client.get("/agents/null-only-agent")
+        assert detail_resp.status_code == 200
+        detail = detail_resp.json()
+        assert detail["latest_published_version"]["id"] == "null-only-agent_new_null"
+
+        draft_resp = client.post("/agents/null-only-agent/versions", json={})
+        assert draft_resp.status_code == 201
+        draft = draft_resp.json()
+        assert draft["forked_from_version_id"] == "null-only-agent_new_null"
+        assert draft["model"] == "claude-sonnet-5"
+        assert draft["enabled_tool_ids"] == ["query_revenue_metrics", "search_docs"]
 
 
 class TestCreateAgent:
@@ -129,6 +310,17 @@ class TestCreateAgent:
                 "name": "Bad Slug Agent",
                 "description": "",
                 "default_model": "gpt-4o-mini",
+            },
+        )
+        assert response.status_code == 422
+
+    def test_create_agent_invalid_default_model_returns_422(self, client: TestClient) -> None:
+        response = client.post(
+            "/agents",
+            json={
+                "id": "invalid-model-agent",
+                "name": "Invalid Model Agent",
+                "default_model": "gpt-100-turbo",
             },
         )
         assert response.status_code == 422
@@ -203,12 +395,58 @@ class TestAgentVersions:
     def test_get_version_detail(self, client: TestClient) -> None:
         response = client.get("/agents/revenue-ops-agent/versions/revenue-ops-agent_v1")
         assert response.status_code == 200
+        assert response.headers["cache-control"] == "private, no-store"
+        assert response.headers["pragma"] == "no-cache"
+        assert response.headers["vary"] == "X-Demo-Operator-Token"
         version = response.json()
         assert version["id"] == "revenue-ops-agent_v1"
         assert version["status"] == "published"
         assert "system_prompt" in version
         assert "enabled_tool_ids" in version
         assert "allowed_scopes" in version
+
+    def test_get_version_summary_redacts_sensitive_detail(self, client: TestClient) -> None:
+        response = client.get("/agents/revenue-ops-agent/versions/revenue-ops-agent_v1/summary")
+        assert response.status_code == 200
+        version = response.json()
+        assert version["id"] == "revenue-ops-agent_v1"
+        assert version["status"] == "published"
+        assert "system_prompt" not in version
+        assert "enabled_tool_ids" not in version
+        assert "allowed_scopes" not in version
+
+    def test_get_version_detail_requires_operator_token_in_demo_env(
+        self,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("APP_ENV", "demo")
+        monkeypatch.setenv("DEMO_OPERATOR_TOKEN", "operator-secret")
+        get_settings.cache_clear()
+        try:
+            missing = client.get("/agents/revenue-ops-agent/versions/revenue-ops-agent_v1")
+            wrong = client.get(
+                "/agents/revenue-ops-agent/versions/revenue-ops-agent_v1",
+                headers={"X-Demo-Operator-Token": "wrong"},
+            )
+            correct = client.get(
+                "/agents/revenue-ops-agent/versions/revenue-ops-agent_v1",
+                headers={"X-Demo-Operator-Token": "operator-secret"},
+            )
+            summary = client.get(
+                "/agents/revenue-ops-agent/versions/revenue-ops-agent_v1/summary"
+            )
+        finally:
+            monkeypatch.delenv("APP_ENV", raising=False)
+            monkeypatch.delenv("DEMO_OPERATOR_TOKEN", raising=False)
+            get_settings.cache_clear()
+
+        assert missing.status_code == 403
+        assert wrong.status_code == 403
+        assert correct.status_code == 200
+        assert "system_prompt" in correct.json()
+        assert summary.status_code == 200
+        assert "system_prompt" not in summary.json()
 
     def test_get_nonexistent_version_returns_404(self, client: TestClient) -> None:
         response = client.get("/agents/revenue-ops-agent/versions/nonexistent")
@@ -409,6 +647,59 @@ class TestValidation:
         )
         assert response.status_code == 422
 
+    def test_current_anthropic_models_are_allowed(self, client: TestClient) -> None:
+        client.post(
+            "/agents",
+            json={"id": "current-claude-agent", "name": "Current Claude Agent"},
+        )
+        response = client.post(
+            "/agents/current-claude-agent/versions",
+            json={"model": "claude-sonnet-5"},
+        )
+        assert response.status_code == 201
+        assert response.json()["model"] == "claude-sonnet-5"
+
+    def test_publish_revalidates_persisted_model(
+        self, client: TestClient, session_factory: Callable[[], Session]
+    ) -> None:
+        client.post(
+            "/agents",
+            json={"id": "persisted-invalid-agent", "name": "Persisted Invalid Agent"},
+        )
+        list_resp = client.get("/agents/persisted-invalid-agent/versions")
+        draft_id = list_resp.json()["versions"][0]["id"]
+        with session_factory() as db_session:
+            draft = db_session.get(AgentVersion, draft_id)
+            assert draft is not None
+            draft.model = "gpt-100-turbo"
+            db_session.commit()
+
+        response = client.post(
+            f"/agents/persisted-invalid-agent/versions/{draft_id}/publish"
+        )
+        assert response.status_code == 422
+
+    def test_publish_rejects_versions_without_evidence_tools(
+        self, client: TestClient
+    ) -> None:
+        client.post(
+            "/agents",
+            json={"id": "no-evidence-agent", "name": "No Evidence Agent"},
+        )
+        list_resp = client.get("/agents/no-evidence-agent/versions")
+        draft_id = list_resp.json()["versions"][0]["id"]
+        update_resp = client.patch(
+            f"/agents/no-evidence-agent/versions/{draft_id}",
+            json={"enabled_tool_ids": ["fetch_account_details"]},
+        )
+        assert update_resp.status_code == 200
+
+        response = client.post(
+            f"/agents/no-evidence-agent/versions/{draft_id}/publish"
+        )
+        assert response.status_code == 422
+        assert "evidence-producing tool" in response.json()["detail"]
+
     def test_publish_records_api_published_by(self, client: TestClient) -> None:
         client.post(
             "/agents",
@@ -454,6 +745,59 @@ class TestVersionOrdering:
         pub_index = versions.index(published[0])
         for d in drafts:
             assert versions.index(d) > pub_index
+
+    def test_default_published_version_uses_null_last_stable_ordering(
+        self,
+        session_factory: Callable[[], Session],
+    ) -> None:
+        with session_factory() as db_session:
+            now = utcnow_naive()
+            db_session.add_all(
+                [
+                    AgentVersion(
+                        id="revenue-ops-agent_legacy_null",
+                        agent_id="revenue-ops-agent",
+                        version_number=None,
+                        semantic_version=None,
+                        status="published",
+                        system_prompt="legacy null version",
+                        model="gpt-4o-mini",
+                        temperature=0.1,
+                        max_tokens=1024,
+                        enabled_tool_ids=["query_revenue_metrics"],
+                        allowed_scopes=[],
+                        published_at=now,
+                        published_by="test",
+                        forked_from_version_id="revenue-ops-agent_v1",
+                        created_at=now,
+                        updated_at=now,
+                    ),
+                    AgentVersion(
+                        id="revenue-ops-agent_v2_ordering",
+                        agent_id="revenue-ops-agent",
+                        version_number=2,
+                        semantic_version="2.0.0",
+                        status="published",
+                        system_prompt="v2",
+                        model="gpt-4o-mini",
+                        temperature=0.1,
+                        max_tokens=1024,
+                        enabled_tool_ids=["query_revenue_metrics"],
+                        allowed_scopes=[],
+                        published_at=now,
+                        published_by="test",
+                        forked_from_version_id="revenue-ops-agent_v1",
+                        created_at=now,
+                        updated_at=now,
+                    ),
+                ]
+            )
+            db_session.commit()
+
+            default = get_default_published_version(db_session)
+
+            assert default is not None
+            assert default.id == "revenue-ops-agent_v2_ordering"
 
 
 class TestCrossAgentSecurity:
@@ -561,6 +905,104 @@ class TestVersionsPagination:
         assert body["total"] == 4
         assert len(body["versions"]) == 2
         assert body["versions"][0]["status"] == "draft"
+
+    def test_versions_pagination_uses_stable_draft_tie_breaker(
+        self,
+        client: TestClient,
+        session_factory: Callable[[], Session],
+    ) -> None:
+        client.post(
+            "/agents",
+            json={"id": "vers-pag-agent-3", "name": "Vers Pag Agent 3"},
+        )
+        created_ids: list[str] = []
+        for i in range(3):
+            response = client.post(
+                "/agents/vers-pag-agent-3/versions",
+                json={"system_prompt": f"draft {i}"},
+            )
+            assert response.status_code == 201
+            created_ids.append(response.json()["id"])
+
+        with session_factory() as db_session:
+            first_created = db_session.get(AgentVersion, created_ids[0])
+            assert first_created is not None
+            same_timestamp = first_created.created_at
+            drafts = db_session.scalars(
+                select(AgentVersion).where(
+                    AgentVersion.agent_id == "vers-pag-agent-3",
+                    AgentVersion.status == "draft",
+                )
+            ).all()
+            for draft in drafts:
+                draft.created_at = same_timestamp
+            db_session.commit()
+
+        first_page = client.get("/agents/vers-pag-agent-3/versions?limit=2&offset=0")
+        second_page = client.get("/agents/vers-pag-agent-3/versions?limit=2&offset=2")
+
+        assert first_page.status_code == 200
+        assert second_page.status_code == 200
+        seen_ids = [
+            version["id"]
+            for version in first_page.json()["versions"] + second_page.json()["versions"]
+        ]
+        assert len(seen_ids) == len(set(seen_ids))
+        assert seen_ids == sorted(seen_ids, reverse=True)
+
+    def test_versions_pagination_uses_stable_published_tie_breaker(
+        self,
+        client: TestClient,
+        session_factory: Callable[[], Session],
+    ) -> None:
+        client.post(
+            "/agents",
+            json={"id": "vers-pag-agent-4", "name": "Vers Pag Agent 4"},
+        )
+        published_ids: list[str] = []
+        list_resp = client.get("/agents/vers-pag-agent-4/versions")
+        initial_id = list_resp.json()["versions"][0]["id"]
+        publish_resp = client.post(
+            f"/agents/vers-pag-agent-4/versions/{initial_id}/publish"
+        )
+        assert publish_resp.status_code == 200
+        published_ids.append(initial_id)
+        for i in range(2):
+            response = client.post(
+                "/agents/vers-pag-agent-4/versions",
+                json={"system_prompt": f"published {i}"},
+            )
+            assert response.status_code == 201
+            version_id = response.json()["id"]
+            publish_resp = client.post(
+                f"/agents/vers-pag-agent-4/versions/{version_id}/publish"
+            )
+            assert publish_resp.status_code == 200
+            published_ids.append(version_id)
+
+        with session_factory() as db_session:
+            first = db_session.get(AgentVersion, published_ids[0])
+            assert first is not None
+            same_timestamp = first.published_at
+            for version_id in published_ids:
+                version = db_session.get(AgentVersion, version_id)
+                assert version is not None
+                version.version_number = None
+                version.published_at = same_timestamp
+            db_session.commit()
+
+        first_page = client.get("/agents/vers-pag-agent-4/versions?limit=2&offset=0")
+        second_page = client.get("/agents/vers-pag-agent-4/versions?limit=2&offset=2")
+
+        assert first_page.status_code == 200
+        assert second_page.status_code == 200
+        seen_ids = [
+            version["id"]
+            for version in first_page.json()["versions"] + second_page.json()["versions"]
+            if version["status"] == "published"
+        ]
+        assert len(seen_ids) == len(set(seen_ids))
+        assert seen_ids == sorted(seen_ids)
 
 
 class TestEdgeCases:
