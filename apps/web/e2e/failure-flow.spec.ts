@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 test.describe('failure flow', () => {
-  test('low-confidence report + rejected approval stays rejected', async ({ page }) => {
+  test('low-confidence report + rejected approval stays rejected', async ({ page, request }) => {
     test.setTimeout(180000);
 
     // 1. Navigate to the incidents list and open the ambiguous/unknown-root-cause
@@ -15,9 +15,20 @@ test.describe('failure flow', () => {
     });
     await ambiguousIncident.click();
 
-    // 2. Start an inline investigation.
-    await expect(page.locator('button:has-text("Run investigation")')).toBeVisible();
-    await page.locator('button:has-text("Run investigation")').click();
+    // 2. Start a fresh inline investigation. The backend intentionally reuses
+    // successful runs by default, so force a new run to avoid stale approval
+    // state from prior specs or local smoke runs.
+    const apiBaseURL = process.env.PLAYWRIGHT_API_BASE_URL || 'http://localhost:8000';
+    const runResponse = await request.post(`${apiBaseURL}/agent/investigations`, {
+      data: {
+        incident_id: 'inc_eval_unknown_root_cause',
+        run_inline: true,
+        force: true,
+      },
+    });
+    expect(runResponse.ok()).toBeTruthy();
+    const run = await runResponse.json();
+    await page.goto(`/agent/runs/${run.id}`);
 
     // 3. Wait for the report to render. The ambiguous scenario should produce
     //    a low or medium confidence report (not high).
@@ -43,13 +54,18 @@ test.describe('failure flow', () => {
 
     const rejectButton = runApprovalPanel.getByRole('button', { name: 'Reject' }).first();
     await expect(rejectButton).toBeVisible();
+    const pendingAction = rejectButton.locator('xpath=ancestor::article[contains(@class, "approval-row")]');
+    const actionTitle = await pendingAction.locator('h3').innerText();
     await rejectButton.click();
 
     // 5. The rejected approval must stay rejected for this run. Its status
-    // badge should show "rejected" and the run-scoped Approve/Reject buttons
-    // must be gone.
-    await expect(runApprovalPanel.locator('.action-rejected').first()).toBeVisible();
-    await expect(runApprovalPanel.getByRole('button', { name: 'Reject' })).toHaveCount(0);
-    await expect(runApprovalPanel.getByRole('button', { name: 'Approve' })).toHaveCount(0);
+    // badge should show "rejected" and that action's Approve/Reject buttons
+    // must be gone. Other high-risk actions in the same run may remain pending.
+    const rejectedAction = runApprovalPanel.locator('article.approval-row').filter({
+      has: page.getByRole('heading', { name: actionTitle }),
+    });
+    await expect(rejectedAction.locator('.action-rejected')).toBeVisible();
+    await expect(rejectedAction.getByRole('button', { name: 'Reject' })).toHaveCount(0);
+    await expect(rejectedAction.getByRole('button', { name: 'Approve' })).toHaveCount(0);
   });
 });

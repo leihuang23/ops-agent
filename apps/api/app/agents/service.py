@@ -249,7 +249,6 @@ def list_versions(
 
     if offset >= total:
         return [], total
-    )
 
     versions: list[AgentVersion] = []
     remaining = limit
