@@ -21,7 +21,7 @@ export default async function AgentDetailPage({
   const result = await getAgent(agentId);
 
   if (!result.ok) {
-    if (result.error.includes('HTTP 404')) {
+    if (result.error === 'Agent endpoint returned HTTP 404') {
       notFound();
     }
     return (
