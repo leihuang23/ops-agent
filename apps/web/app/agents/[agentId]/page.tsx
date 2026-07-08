@@ -29,7 +29,7 @@ export default async function AgentDetailPage({
         <header className="dashboard-header">
           <div>
             <p className="eyebrow">Control plane</p>
-            <h1>Agent not found</h1>
+            <h1>Agent unavailable</h1>
           </div>
         </header>
         <section className="panel anomaly-panel">
