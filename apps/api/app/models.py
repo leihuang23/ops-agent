@@ -280,8 +280,8 @@ class AgentRun(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
     incident: Mapped[Incident] = relationship(back_populates="agent_runs")
-    agent: Mapped[Agent] = relationship()
-    agent_version: Mapped[AgentVersion] = relationship()
+    agent: Mapped[Agent] = relationship(back_populates="runs")
+    agent_version: Mapped[AgentVersion] = relationship(back_populates="runs")
     steps: Mapped[list[AgentRunStep]] = relationship(
         back_populates="run", cascade="all, delete-orphan", order_by="AgentRunStep.sequence"
     )
