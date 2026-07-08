@@ -122,8 +122,9 @@ export async function saveAgentVersionDraft(formData: FormData) {
   const returnTo = formData.get('return_to');
 
   const returnPath =
-    typeof returnTo === 'string' && returnTo.length > 0 ? returnTo : `/agents/${encodeURIComponent(agentId)}`;
-
+    typeof returnTo === 'string' && returnTo.startsWith('/') && !returnTo.startsWith('//')
+      ? returnTo
+      : `/agents/${encodeURIComponent(agentId)}`;
   const enabledToolIds: string[] =
     toolsPresent === '1'
       ? formData.getAll('enabled_tool_ids').filter((v): v is string => typeof v === 'string')
