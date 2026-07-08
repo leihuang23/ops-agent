@@ -175,7 +175,7 @@ def upgrade() -> None:
     )
     conn.execute(
         sa.update(agent_runs)
-        .where(agent_runs.c.agent_id.is_(None))
+        .where(sa.or_(agent_runs.c.agent_id.is_(None), agent_runs.c.agent_version_id.is_(None)))
         .values(agent_id=DEFAULT_AGENT_ID, agent_version_id=DEFAULT_VERSION_ID)
     )
 
