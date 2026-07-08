@@ -79,6 +79,14 @@ function RunReport({
         </div>
         <div className="header-actions">
           <span className={`run-status run-status-${run.status}`}>{run.status}</span>
+          {run.agent && run.agent_version ? (
+            <Link
+              className="action-button secondary-action"
+              href={`/agents/${run.agent_id}/versions/${run.agent_version_id}`}
+            >
+              {run.agent.name} · v{run.agent_version.version_number ?? 'draft'}
+            </Link>
+          ) : null}
           <Link className="action-button secondary-action" href={`/incidents/${run.incident_id}`}>
             Incident
           </Link>
@@ -96,6 +104,35 @@ function RunReport({
         <div>
           <span className="label">Completed</span>
           <strong>{run.completed_at ? formatDateTime(run.completed_at) : 'In progress'}</strong>
+        </div>
+        <div>
+          <span className="label">Agent</span>
+          <strong>
+            {run.agent ? (
+              <Link href={`/agents/${run.agent_id}`}>{run.agent.name}</Link>
+            ) : (
+              'unknown'
+            )}
+          </strong>
+        </div>
+        <div>
+          <span className="label">Version</span>
+          <strong>
+            {run.agent_version ? (
+              <Link href={`/agents/${run.agent_id}/versions/${run.agent_version_id}`}>
+                v{run.agent_version.version_number ?? 'draft'}
+              </Link>
+            ) : (
+              'unknown'
+            )}
+          </strong>
+        </div>
+        <div>
+          <span className="label">Model</span>
+          <strong>
+            {run.agent_version?.model ??
+              (typeof run.trace_metadata?.llm_model === 'string' ? run.trace_metadata.llm_model : 'n/a')}
+          </strong>
         </div>
         <div>
           <span className="label">Trace</span>

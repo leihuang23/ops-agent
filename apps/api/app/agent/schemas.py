@@ -13,6 +13,7 @@ class AgentInvestigationCreate(BaseModel):
     force: bool = False
     run_inline: bool = False
     idempotency_key: str | None = Field(default=None, max_length=128)
+    agent_version_id: str | None = None
 
 
 class ReportAffectedAccount(BaseModel):
@@ -68,6 +69,8 @@ class AgentRunStepRead(BaseModel):
 class AgentRunSummary(BaseModel):
     id: str
     incident_id: str
+    agent_id: str
+    agent_version_id: str
     status: Literal["queued", "running", "succeeded", "failed"]
     trace_id: str | None
     trace_url: str | None
@@ -86,6 +89,10 @@ class AgentRunSummary(BaseModel):
 class AgentRunDetail(BaseModel):
     id: str
     incident_id: str
+    agent_id: str
+    agent_version_id: str
+    agent: dict[str, Any] | None = None
+    agent_version: dict[str, Any] | None = None
     status: Literal["queued", "running", "succeeded", "failed"]
     is_stale: bool = False
     trace_id: str | None

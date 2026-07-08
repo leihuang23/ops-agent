@@ -19,6 +19,7 @@ from app.agent.schemas import (
     ReportEvidence,
 )
 from app.agent.persistence import AgentRunRecorder, utcnow_naive
+from app.agents.service import DEFAULT_AGENT_ID, DEFAULT_AGENT_VERSION_ID
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
@@ -229,6 +230,8 @@ def test_investigation_start_restarts_after_orphaned_running_run(
         orphaned_run = AgentRun(
             id="run_orphaned_running",
             incident_id=incident_id,
+            agent_id=DEFAULT_AGENT_ID,
+            agent_version_id=DEFAULT_AGENT_VERSION_ID,
             status="running",
             trace_id="local-test-trace",
             input_payload={"incident_id": incident_id},
@@ -336,6 +339,8 @@ def test_investigation_start_reuses_active_queued_run_by_default(
         active_run = AgentRun(
             id="run_active_queued",
             incident_id=incident_id,
+            agent_id=DEFAULT_AGENT_ID,
+            agent_version_id=DEFAULT_AGENT_VERSION_ID,
             status="queued",
             trace_id=None,
             input_payload={"incident_id": incident_id},
@@ -382,6 +387,8 @@ def test_agent_run_read_exposes_stale_queued_run_without_mutating_status(
         stale_run = AgentRun(
             id="run_stale_queued",
             incident_id=incident_id,
+            agent_id=DEFAULT_AGENT_ID,
+            agent_version_id=DEFAULT_AGENT_VERSION_ID,
             status="queued",
             trace_id=None,
             input_payload={"incident_id": incident_id},
@@ -429,6 +436,8 @@ def test_running_run_with_recent_step_activity_is_not_marked_stale(
         run = AgentRun(
             id="run_running_with_recent_step",
             incident_id=incident_id,
+            agent_id=DEFAULT_AGENT_ID,
+            agent_version_id=DEFAULT_AGENT_VERSION_ID,
             status="running",
             trace_id="local-test-trace",
             input_payload={"incident_id": incident_id},
@@ -488,6 +497,8 @@ def test_failed_run_is_terminal_for_background_executor(
         run = AgentRun(
             id="run_failed_terminal",
             incident_id=incident_id,
+            agent_id=DEFAULT_AGENT_ID,
+            agent_version_id=DEFAULT_AGENT_VERSION_ID,
             status="failed",
             trace_id="local-test-trace",
             input_payload={"incident_id": incident_id},
@@ -532,6 +543,8 @@ def test_concurrent_executors_claim_queued_run_once(
         run = AgentRun(
             id="run_claim_once",
             incident_id=incident_id,
+            agent_id=DEFAULT_AGENT_ID,
+            agent_version_id=DEFAULT_AGENT_VERSION_ID,
             status="queued",
             trace_id=None,
             input_payload={"incident_id": incident_id},
@@ -596,6 +609,8 @@ def test_database_rejects_two_active_runs_for_one_incident(
         first_run = AgentRun(
             id="run_active_one",
             incident_id=incident_id,
+            agent_id=DEFAULT_AGENT_ID,
+            agent_version_id=DEFAULT_AGENT_VERSION_ID,
             status="queued",
             trace_id=None,
             input_payload={"incident_id": incident_id},
@@ -611,6 +626,8 @@ def test_database_rejects_two_active_runs_for_one_incident(
         second_run = AgentRun(
             id="run_active_two",
             incident_id=incident_id,
+            agent_id=DEFAULT_AGENT_ID,
+            agent_version_id=DEFAULT_AGENT_VERSION_ID,
             status="running",
             trace_id="local-test-trace",
             input_payload={"incident_id": incident_id},
@@ -720,6 +737,8 @@ def test_investigation_start_backfills_actions_for_existing_successful_run(
         run = AgentRun(
             id="run_success_before_actions",
             incident_id=incident_id,
+            agent_id=DEFAULT_AGENT_ID,
+            agent_version_id=DEFAULT_AGENT_VERSION_ID,
             status="succeeded",
             trace_id="local-test-trace",
             input_payload={"incident_id": incident_id},
@@ -1013,6 +1032,8 @@ def _make_test_run(incident_id: str) -> AgentRun:
     return AgentRun(
         id=f"run_{uuid4().hex[:16]}",
         incident_id=incident_id,
+        agent_id=DEFAULT_AGENT_ID,
+        agent_version_id=DEFAULT_AGENT_VERSION_ID,
         status="running",
         trace_id=None,
         trace_url=None,

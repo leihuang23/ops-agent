@@ -23,6 +23,7 @@ from app.llm import (
 )
 from app.llm.schemas import LLMUsage
 from app.agent.tools import (
+    TOOL_IDS,
     FetchAccountDetailsInput,
     FetchSupportTicketsInput,
     QueryRevenueMetricsInput,
@@ -60,8 +61,15 @@ def run_investigation_workflow(
     run: AgentRun,
     trace: AgentTraceHandle | None = None,
     llm_client: LLMClient | None = None,
+    enabled_tool_ids: set[str] | frozenset[str] | None = None,
 ) -> InvestigationReport:
     recorder = AgentRunRecorder(session, run, trace)
+
+    if enabled_tool_ids is None:
+        enabled = set(TOOL_IDS)
+    else:
+        enabled = set(enabled_tool_ids) & set(TOOL_IDS)
+
     builder = StateGraph(InvestigationState)
 
     def intake_node(state: InvestigationState) -> dict[str, Any]:
@@ -88,31 +96,37 @@ def run_investigation_workflow(
             account_ids = [
                 account["account_id"] for account in incident["affected_accounts"]
             ]
+            tool_calls: list[dict[str, Any]] = []
+            if "query_revenue_metrics" in enabled:
+                tool_calls.append({
+                    "tool_name": "query_revenue_metrics",
+                    "reason": "Confirm the metric movement and failed invoice evidence.",
+                })
+            if "fetch_account_details" in enabled:
+                tool_calls.append({
+                    "tool_name": "fetch_account_details",
+                    "reason": "Attach account, subscription, and invoice context.",
+                })
+            if "search_docs" in enabled:
+                tool_calls.append({
+                    "tool_name": "search_docs",
+                    "reason": "Retrieve internal runbooks and policy citations.",
+                    "query": doc_query,
+                })
+            if "fetch_support_tickets" in enabled:
+                tool_calls.append({
+                    "tool_name": "fetch_support_tickets",
+                    "reason": "Connect account impact with recent customer signals.",
+                })
+            disabled_tools = sorted(set(TOOL_IDS) - enabled)
             return {
                 "objective": (
                     "Explain the paid MRR drop, identify affected accounts, "
                     "cite retrieved evidence, and propose approval-safe next actions."
                 ),
                 "hypotheses": _hypotheses_for_incident(incident),
-                "tool_calls": [
-                    {
-                        "tool_name": "query_revenue_metrics",
-                        "reason": "Confirm the metric movement and failed invoice evidence.",
-                    },
-                    {
-                        "tool_name": "fetch_account_details",
-                        "reason": "Attach account, subscription, and invoice context.",
-                    },
-                    {
-                        "tool_name": "search_docs",
-                        "reason": "Retrieve internal runbooks and policy citations.",
-                        "query": doc_query,
-                    },
-                    {
-                        "tool_name": "fetch_support_tickets",
-                        "reason": "Connect account impact with recent customer signals.",
-                    },
-                ],
+                "tool_calls": tool_calls,
+                "disabled_tool_ids": disabled_tools,
                 "account_ids": account_ids,
                 "doc_query": doc_query,
             }
@@ -122,6 +136,7 @@ def run_investigation_workflow(
             inputs={
                 "incident_id": incident["id"],
                 "metric_name": incident["metric_evidence"]["metric_name"],
+                "enabled_tool_ids": sorted(enabled),
             },
             action=build_plan,
         )
@@ -129,64 +144,103 @@ def run_investigation_workflow(
 
     def query_metrics_node(state: InvestigationState) -> dict[str, Any]:
         incident_id = state["incident_id"]
-        metrics = recorder.record(
-            stage="query metrics",
-            tool_name="query_revenue_metrics",
-            inputs={"incident_id": incident_id},
-            action=lambda: query_revenue_metrics(
-                session, QueryRevenueMetricsInput(incident_id=incident_id)
-            ).model_dump(mode="json"),
-        )
-        account_details = recorder.record(
-            stage="query metrics",
-            tool_name="fetch_account_details",
-            inputs={
-                "account_ids": metrics["affected_account_ids"],
-                "invoice_ids": metrics["invoice_ids"],
-            },
-            action=lambda: fetch_account_details(
-                session,
-                FetchAccountDetailsInput(
-                    account_ids=metrics["affected_account_ids"],
-                    invoice_ids=metrics["invoice_ids"],
-                ),
-            ).model_dump(mode="json"),
-        )
+        if "query_revenue_metrics" in enabled:
+            metrics = recorder.record(
+                stage="query metrics",
+                tool_name="query_revenue_metrics",
+                inputs={"incident_id": incident_id},
+                action=lambda: query_revenue_metrics(
+                    session, QueryRevenueMetricsInput(incident_id=incident_id)
+                ).model_dump(mode="json"),
+            )
+        else:
+            incident = state["incident"]
+            metrics = {
+                "incident_id": incident_id,
+                "metric_evidence": incident["metric_evidence"],
+                "affected_account_ids": [
+                    a["account_id"] for a in incident["affected_accounts"]
+                ],
+                "affected_accounts": incident["affected_accounts"],
+                "invoice_ids": incident["metric_evidence"].get("invoice_ids", []),
+                "sql_evidence": [],
+                "tool_disabled": True,
+                "tool_disabled_reason": "query_revenue_metrics was not enabled for this agent version; using incident summary only.",
+            }
+
+        if "fetch_account_details" in enabled:
+            account_details = recorder.record(
+                stage="query metrics",
+                tool_name="fetch_account_details",
+                inputs={
+                    "account_ids": metrics["affected_account_ids"],
+                    "invoice_ids": metrics["invoice_ids"],
+                },
+                action=lambda: fetch_account_details(
+                    session,
+                    FetchAccountDetailsInput(
+                        account_ids=metrics["affected_account_ids"],
+                        invoice_ids=metrics["invoice_ids"],
+                    ),
+                ).model_dump(mode="json"),
+            )
+        else:
+            account_details = {
+                "accounts": [],
+                "tool_disabled": True,
+                "tool_disabled_reason": "fetch_account_details was not enabled for this agent version.",
+            }
+
         return {"revenue_metrics": metrics, "account_details": account_details}
 
     def search_docs_node(state: InvestigationState) -> dict[str, Any]:
         plan = state["plan"]
-        doc_results = recorder.record(
-            stage="search docs",
-            tool_name="search_docs",
-            inputs={"query": plan["doc_query"], "limit": 5},
-            action=lambda: search_docs(
-                session, SearchDocsInput(query=plan["doc_query"], limit=5)
-            ).model_dump(mode="json"),
-        )
+        if "search_docs" in enabled:
+            doc_results = recorder.record(
+                stage="search docs",
+                tool_name="search_docs",
+                inputs={"query": plan["doc_query"], "limit": 5},
+                action=lambda: search_docs(
+                    session, SearchDocsInput(query=plan["doc_query"], limit=5)
+                ).model_dump(mode="json"),
+            )
+        else:
+            doc_results = {
+                "query": plan.get("doc_query", ""),
+                "results": [],
+                "tool_disabled": True,
+                "tool_disabled_reason": "search_docs was not enabled for this agent version.",
+            }
         return {"doc_results": doc_results}
 
     def fetch_tickets_node(state: InvestigationState) -> dict[str, Any]:
         incident = state["incident"]
         plan = state["plan"]
         since = _parse_datetime(incident["detected_at"]) - timedelta(days=30)
-        support_tickets = recorder.record(
-            stage="fetch tickets",
-            tool_name="fetch_support_tickets",
-            inputs={
-                "account_ids": plan["account_ids"],
-                "since": since,
-                "limit": 24,
-            },
-            action=lambda: fetch_support_tickets(
-                session,
-                FetchSupportTicketsInput(
-                    account_ids=plan["account_ids"],
-                    since=since,
-                    limit=24,
-                ),
-            ).model_dump(mode="json"),
-        )
+        if "fetch_support_tickets" in enabled:
+            support_tickets = recorder.record(
+                stage="fetch tickets",
+                tool_name="fetch_support_tickets",
+                inputs={
+                    "account_ids": plan["account_ids"],
+                    "since": since,
+                    "limit": 24,
+                },
+                action=lambda: fetch_support_tickets(
+                    session,
+                    FetchSupportTicketsInput(
+                        account_ids=plan["account_ids"],
+                        since=since,
+                        limit=24,
+                    ),
+                ).model_dump(mode="json"),
+            )
+        else:
+            support_tickets = {
+                "tickets": [],
+                "tool_disabled": True,
+                "tool_disabled_reason": "fetch_support_tickets was not enabled for this agent version.",
+            }
         return {"support_tickets": support_tickets}
 
     def synthesize_report_node(state: InvestigationState) -> dict[str, Any]:
@@ -200,11 +254,13 @@ def run_investigation_workflow(
                     "doc_results",
                     "support_tickets",
                 ],
+                "enabled_tool_ids": sorted(enabled),
             },
             action=lambda: _synthesize_report(
                 state,
                 llm_client=llm_client or NoopLLMClient(),
                 run=recorder.run,
+                enabled_tool_ids=enabled,
             ).model_dump(mode="json"),
         )
         return {"final_report": report}
@@ -229,13 +285,24 @@ def run_investigation_workflow(
 
 
 def _synthesize_report(
-    state: InvestigationState, *, llm_client: LLMClient, run: AgentRun
+    state: InvestigationState,
+    *,
+    llm_client: LLMClient,
+    run: AgentRun,
+    enabled_tool_ids: set[str] | frozenset[str] | None = None,
 ) -> InvestigationReport:
     incident = state["incident"]
-    revenue_metrics = state["revenue_metrics"]
-    account_details = state["account_details"]
-    doc_results = state["doc_results"]
-    support_tickets = state["support_tickets"]
+    revenue_metrics = state.get("revenue_metrics", {
+        "incident_id": incident["id"],
+        "metric_evidence": incident["metric_evidence"],
+        "affected_account_ids": [a["account_id"] for a in incident["affected_accounts"]],
+        "affected_accounts": incident["affected_accounts"],
+        "invoice_ids": incident["metric_evidence"].get("invoice_ids", []),
+        "sql_evidence": [],
+    })
+    account_details = state.get("account_details", {"accounts": []})
+    doc_results = state.get("doc_results", {"query": "", "results": []})
+    support_tickets = state.get("support_tickets", {"tickets": []})
 
     diagnosis, llm_usage = diagnose_with_llm_or_fallback(
         llm_client=llm_client,
@@ -247,6 +314,7 @@ def _synthesize_report(
     )
     run.trace_metadata = {
         **run.trace_metadata,
+        "agent_version_id": run.agent_version_id,
         "llm_provider": llm_usage.provider,
         "llm_model": llm_usage.model,
         "llm_latency_ms": llm_usage.latency_ms,
@@ -266,28 +334,45 @@ def _synthesize_report(
         run.cost_estimate_usd = 0.0
 
     tickets_by_account: dict[str, list[dict[str, Any]]] = {}
-    for ticket in support_tickets["tickets"]:
+    for ticket in support_tickets.get("tickets", []):
         tickets_by_account.setdefault(ticket["account_id"], []).append(ticket)
 
-    affected_accounts = [
-        ReportAffectedAccount(
-            account_id=account["account_id"],
-            account_name=account["account_name"],
-            segment=account["segment"],
-            health_score=account["health_score"],
-            failed_invoice_cents=sum(
-                invoice["amount_cents"] for invoice in account["failed_invoices"]
-            ),
-            failed_invoice_ids=[
-                invoice["invoice_id"] for invoice in account["failed_invoices"]
-            ],
-            ticket_ids=[
-                ticket["ticket_id"]
-                for ticket in tickets_by_account.get(account["account_id"], [])
-            ],
-        )
-        for account in account_details["accounts"]
-    ]
+    if account_details.get("accounts"):
+        affected_accounts = [
+            ReportAffectedAccount(
+                account_id=account["account_id"],
+                account_name=account["account_name"],
+                segment=account["segment"],
+                health_score=account["health_score"],
+                failed_invoice_cents=sum(
+                    invoice["amount_cents"] for invoice in account.get("failed_invoices", [])
+                ),
+                failed_invoice_ids=[
+                    invoice["invoice_id"] for invoice in account.get("failed_invoices", [])
+                ],
+                ticket_ids=[
+                    ticket["ticket_id"]
+                    for ticket in tickets_by_account.get(account["account_id"], [])
+                ],
+            )
+            for account in account_details["accounts"]
+        ]
+    else:
+        affected_accounts = [
+            ReportAffectedAccount(
+                account_id=account["account_id"],
+                account_name=account["account_name"],
+                segment=account.get("segment", "unknown"),
+                health_score=account.get("health_score", 0),
+                failed_invoice_cents=account.get("failed_invoice_cents", 0),
+                failed_invoice_ids=account.get("failed_invoice_ids", []),
+                ticket_ids=[
+                    ticket["ticket_id"]
+                    for ticket in tickets_by_account.get(account["account_id"], [])
+                ],
+            )
+            for account in revenue_metrics.get("affected_accounts", incident["affected_accounts"])
+        ]
 
     evidence = _report_evidence(
         revenue_metrics=revenue_metrics,

@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.agent.persistence import utcnow_naive
 from app.agent.schemas import AgentRunDetail
 from app.agent.service import start_investigation_run
+from app.agents.service import DEFAULT_AGENT_ID, DEFAULT_AGENT_VERSION_ID
 from app.celery_app import CELERY_TASK_TIME_LIMIT
 from app.db.session import SessionLocal
 from app.evals.schemas import EvalResultsReport, EvalResultRead, EvalRunSummary
@@ -290,6 +291,8 @@ def _record_failed_agent_run(
     failed_run = AgentRun(
         id=f"run_failed_{uuid4().hex[:16]}",
         incident_id=incident_id,
+        agent_id=DEFAULT_AGENT_ID,
+        agent_version_id=DEFAULT_AGENT_VERSION_ID,
         status="failed",
         trace_id=None,
         trace_url=None,

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 import app.models  # noqa: F401
 from app.agent.persistence import utcnow_naive
 from app.agent.service import mark_run_failed_on_timeout
+from app.agents.service import DEFAULT_AGENT_ID, DEFAULT_AGENT_VERSION_ID
 from app.db.base import Base
 from app.models import AgentRun, EvalCase
 from app.seed import reseed_database
@@ -39,6 +40,8 @@ def _make_running_run(
     run = AgentRun(
         id=run_id,
         incident_id=incident_id,
+        agent_id=DEFAULT_AGENT_ID,
+        agent_version_id=DEFAULT_AGENT_VERSION_ID,
         status="running",
         trace_id="trace_local",
         trace_url=None,

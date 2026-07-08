@@ -18,6 +18,7 @@ from app.agents.service import (
     ConcurrentPublishError,
     DuplicateAgentError,
     ImmutableVersionError,
+    InvalidVersionConfigError,
     VersionNotFoundError,
     create_agent,
     create_version,
@@ -121,6 +122,11 @@ def create_version_endpoint(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(exc),
         ) from exc
+    except InvalidVersionConfigError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
     response.status_code = status.HTTP_201_CREATED
     return version
 
@@ -149,6 +155,11 @@ def update_version_endpoint(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
         ) from exc
+    except InvalidVersionConfigError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
 
 
 @router.post(
@@ -163,7 +174,7 @@ def publish_version_endpoint(
     db: Session = Depends(get_db),
 ) -> PublishResult:
     try:
-        version = publish_version(db, agent_id, version_id)
+        version = publish_version(db, agent_id, version_id, published_by="api")
     except (AgentNotFoundError, VersionNotFoundError) as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

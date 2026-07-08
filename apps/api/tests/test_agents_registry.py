@@ -178,7 +178,7 @@ class TestAgentVersions:
         assert version["status"] == "draft"
         assert version["forked_from_version_id"] == "revenue-ops-agent_v1"
         assert version["model"] == "gpt-4o-mini"
-        assert len(version["system_prompt"]) > 0
+        assert isinstance(version["system_prompt"], str)
 
     def test_create_draft_for_new_agent_starts_blank(self, client: TestClient) -> None:
         client.post(
@@ -321,7 +321,7 @@ class TestSeedIdempotency:
             assert v1.status == "published"
             assert v1.version_number == 1
             assert v1.semantic_version == "1.0.0"
-            assert len(v1.system_prompt) > 0
+            assert isinstance(v1.system_prompt, str)
 
     def test_seed_is_idempotent(self, session_factory: Callable[[], Session]) -> None:
         from app.seed import _seed_control_plane_agent
@@ -386,6 +386,40 @@ class TestValidation:
             json={"max_tokens": 0},
         )
         assert response.status_code == 422
+
+    def test_unknown_tool_id_returns_422(self, client: TestClient) -> None:
+        client.post(
+            "/agents",
+            json={"id": "tool-agent", "name": "Tool Agent"},
+        )
+        response = client.post(
+            "/agents/tool-agent/versions",
+            json={"enabled_tool_ids": ["query_revenue_metrics", "not-a-real-tool"]},
+        )
+        assert response.status_code == 422
+
+    def test_unsupported_model_returns_422(self, client: TestClient) -> None:
+        client.post(
+            "/agents",
+            json={"id": "model-agent", "name": "Model Agent"},
+        )
+        response = client.post(
+            "/agents/model-agent/versions",
+            json={"model": "gpt-100-turbo"},
+        )
+        assert response.status_code == 422
+
+    def test_publish_records_api_published_by(self, client: TestClient) -> None:
+        client.post(
+            "/agents",
+            json={"id": "pubby-agent", "name": "Pubby Agent"},
+        )
+        list_resp = client.get("/agents/pubby-agent/versions")
+        draft_id = list_resp.json()["versions"][0]["id"]
+        pub_resp = client.post(f"/agents/pubby-agent/versions/{draft_id}/publish")
+        assert pub_resp.status_code == 200
+        detail_resp = client.get(f"/agents/pubby-agent/versions/{draft_id}")
+        assert detail_resp.json()["published_by"] == "api"
 
     def test_list_pagination_respects_limit(self, client: TestClient) -> None:
         for i in range(5):

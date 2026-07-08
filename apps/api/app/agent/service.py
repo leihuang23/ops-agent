@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.agent.persistence import AgentRunRecorder
 from app.agent.persistence import utcnow_naive
@@ -17,43 +18,21 @@ from app.agent.schemas import (
 )
 from app.agent.tracing import AgentTraceHandle, start_agent_trace
 from app.agent.workflow import run_investigation_workflow
+from app.agents.service import (
+    get_default_published_version,
+    get_published_version,
+)
 from app.approvals.service import list_mock_actions_for_run, propose_actions_for_report
 from app.cache import Cache
-from app.core.config import get_settings
 from app.db.session import SessionLocal
-from app.llm import AnthropicClient, LLMClient, NoopLLMClient, OpenAIClient
+from app.llm import build_llm_client_for_version
 from app.logging_config import get_logger
-from app.models import AgentRun, AgentRunStep, Incident
+from app.models import AgentRun, AgentRunStep, AgentVersion, Incident
 
 ACTIVE_RUN_STALE_AFTER = timedelta(minutes=10)
 ACTIVE_RUN_STATUSES = ("queued", "running")
 
 logger = get_logger(__name__)
-
-
-def build_llm_client_from_settings() -> LLMClient:
-    settings = get_settings()
-    if settings.llm_provider == "openai":
-        if not settings.openai_api_key:
-            return NoopLLMClient()
-        return OpenAIClient(
-            api_key=settings.openai_api_key,
-            model=settings.llm_model,
-            temperature=settings.llm_temperature,
-            max_tokens=settings.llm_max_tokens,
-            timeout_seconds=settings.llm_timeout_seconds,
-        )
-    if settings.llm_provider == "anthropic":
-        if not settings.anthropic_api_key:
-            return NoopLLMClient()
-        return AnthropicClient(
-            api_key=settings.anthropic_api_key,
-            model=settings.llm_model,
-            temperature=settings.llm_temperature,
-            max_tokens=settings.llm_max_tokens,
-            timeout_seconds=settings.llm_timeout_seconds,
-        )
-    return NoopLLMClient()
 
 
 IDEMPOTENCY_CACHE_TTL_SECONDS = 3600
@@ -65,10 +44,26 @@ def create_investigation_run(
     *,
     force: bool = False,
     idempotency_key: str | None = None,
+    agent_version_id: str | None = None,
 ) -> tuple[AgentRunDetail, bool]:
     incident = session.get(Incident, incident_id)
     if incident is None:
         raise LookupError(f"Unknown incident id: {incident_id}")
+
+    if agent_version_id is not None:
+        agent_version = get_published_version(session, agent_version_id)
+        if agent_version is None:
+            raise LookupError(
+                f"Unknown or unpublished agent version id: {agent_version_id}"
+            )
+    else:
+        agent_version = get_default_published_version(session)
+        if agent_version is None:
+            raise LookupError(
+                "No default published agent version found"
+            )
+    resolved_agent_id = agent_version.agent_id
+    resolved_version_id = agent_version.id
 
     _abandon_orphaned_runs(session, incident_id)
 
@@ -81,7 +76,9 @@ def create_investigation_run(
                 return get_run_detail(session, existing_run_id), False
 
     if not force:
-        reusable_run_id = _latest_reusable_run_id(session, incident_id)
+        reusable_run_id = _latest_reusable_run_id(
+            session, incident_id, agent_version_id=resolved_version_id
+        )
         if reusable_run_id is not None:
             reusable_run = session.get(AgentRun, reusable_run_id)
             if reusable_run is not None and reusable_run.status == "succeeded":
@@ -93,12 +90,27 @@ def create_investigation_run(
     run = AgentRun(
         id=run_id,
         incident_id=incident_id,
+        agent_id=resolved_agent_id,
+        agent_version_id=resolved_version_id,
         status="queued",
         trace_id=None,
         trace_url=None,
         trace_provider=None,
         trace_metadata={},
-        input_payload={"incident_id": incident_id},
+        input_payload={
+            "incident_id": incident_id,
+            "agent_version": {
+                "id": agent_version.id,
+                "agent_id": agent_version.agent_id,
+                "version_number": agent_version.version_number,
+                "semantic_version": agent_version.semantic_version,
+                "model": agent_version.model,
+                "temperature": agent_version.temperature,
+                "max_tokens": agent_version.max_tokens,
+                "system_prompt": agent_version.system_prompt,
+                "enabled_tool_ids": list(agent_version.enabled_tool_ids or []),
+            },
+        },
         final_report=None,
         token_estimate=0,
         cost_estimate_usd=0.0,
@@ -113,7 +125,11 @@ def create_investigation_run(
         session.commit()
     except IntegrityError:
         session.rollback()
-        reusable_run_id = _latest_reusable_run_id(session, incident_id, active_only=True)
+        reusable_run_id = _latest_reusable_run_id(
+            session, incident_id, active_only=True, agent_version_id=resolved_version_id
+        )
+        if reusable_run_id is None:
+            reusable_run_id = _latest_reusable_run_id(session, incident_id, active_only=True)
         if reusable_run_id is None:
             raise
         return get_run_detail(session, reusable_run_id), False
@@ -128,9 +144,15 @@ def create_investigation_run(
 
 
 def start_investigation_run(
-    session: Session, incident_id: str, *, force: bool = False
+    session: Session,
+    incident_id: str,
+    *,
+    force: bool = False,
+    agent_version_id: str | None = None,
 ) -> tuple[AgentRunDetail, bool]:
-    run, created = create_investigation_run(session, incident_id, force=force)
+    run, created = create_investigation_run(
+        session, incident_id, force=force, agent_version_id=agent_version_id
+    )
     if not created:
         return run, False
 
@@ -159,7 +181,12 @@ def execute_investigation_run_with_session(
     trace = start_agent_trace(run_id=run.id, incident_id=run.incident_id)
     logger.info(
         "Starting investigation run",
-        extra={"run_id": run.id, "incident_id": run.incident_id},
+        extra={
+            "run_id": run.id,
+            "incident_id": run.incident_id,
+            "agent_id": run.agent_id,
+            "agent_version_id": run.agent_version_id,
+        },
     )
     claim = session.execute(
         update(AgentRun)
@@ -188,9 +215,91 @@ def execute_investigation_run_with_session(
     session.refresh(run)
     _invalidate_run_detail_cache(run_id)
 
-    llm_client = build_llm_client_from_settings()
+    agent_version = session.get(AgentVersion, run.agent_version_id) if run.agent_version_id else None
+    version_warning: str | None = None
+    fallback_version_id: str | None = None
+    if agent_version is None:
+        from app.agents.service import get_default_published_version
+        fallback = get_default_published_version(session)
+        if fallback is None:
+            _finish_trace(
+                trace,
+                error=(
+                    f"Agent version {run.agent_version_id!r} not found and no default "
+                    "published version is available; cannot start investigation."
+                ),
+            )
+            run.status = "failed"
+            run.error = (
+                f"Agent version {run.agent_version_id!r} not found and no default "
+                "published version is available. Seed the database or create a "
+                "default agent before running investigations."
+            )
+            run.completed_at = utcnow_naive()
+            run.updated_at = run.completed_at
+            session.commit()
+            _invalidate_run_detail_cache(run.id)
+            logger.error(
+                "Cannot start investigation: no agent version available",
+                extra={"run_id": run.id, "requested_version_id": run.agent_version_id},
+            )
+            return get_run_detail(session, run.id)
+        llm_client = build_llm_client_for_version(fallback)
+        enabled_tool_ids: set[str] = set(fallback.enabled_tool_ids or [])
+        requested_version_id = run.agent_version_id
+        version_warning = (
+            f"Agent version {requested_version_id!r} not found; falling back "
+            f"to default published version {fallback.id!r}."
+        )
+        fallback_version_id = fallback.id
+        run.agent_id = fallback.agent_id
+        run.agent_version_id = fallback.id
+        run.trace_metadata = {
+            **(run.trace_metadata or {}),
+            "version_fallback": {
+                "requested_version_id": requested_version_id,
+                "fallback_version_id": fallback.id,
+                "reason": "requested_version_not_found",
+            },
+        }
+        if isinstance(run.input_payload, dict):
+            run.input_payload = {
+                **run.input_payload,
+                "agent_version_id": fallback.id,
+                "agent_version": {
+                    "id": fallback.id,
+                    "version_number": fallback.version_number,
+                    "semantic_version": fallback.semantic_version,
+                    "model": fallback.model,
+                    "system_prompt": fallback.system_prompt,
+                    "enabled_tool_ids": list(fallback.enabled_tool_ids or []),
+                },
+                "version_fallback": {
+                    "from": requested_version_id,
+                    "to": fallback.id,
+                },
+            }
+        session.flush()
+    else:
+        llm_client = build_llm_client_for_version(agent_version)
+        enabled_tool_ids = set(agent_version.enabled_tool_ids or [])
+    if version_warning:
+        logger.warning(
+            "Agent version fallback during execution",
+            extra={
+                "run_id": run.id,
+                "requested_version_id": requested_version_id,
+                "fallback_version_id": fallback_version_id,
+                "warning": version_warning,
+            },
+        )
+        session.commit()
+        session.refresh(run)
     try:
-        report = run_investigation_workflow(session, run, trace, llm_client=llm_client)
+        report = run_investigation_workflow(
+            session, run, trace, llm_client=llm_client,
+            enabled_tool_ids=enabled_tool_ids,
+        )
     except Exception as exc:
         _finish_trace(trace, error=str(exc))
         session.rollback()
@@ -320,6 +429,8 @@ def list_agent_runs(session: Session, *, limit: int = 100) -> list[AgentRunSumma
         AgentRunSummary(
             id=run.id,
             incident_id=run.incident_id,
+            agent_id=run.agent_id,
+            agent_version_id=run.agent_version_id,
             status=run.status,  # type: ignore[arg-type]
             trace_id=run.trace_id,
             trace_url=run.trace_url,
@@ -360,10 +471,39 @@ def get_run_detail(session: Session, run_id: str) -> AgentRunDetail:
     if cached is not None:
         return AgentRunDetail.model_validate(cached)
 
-    run = session.get(AgentRun, run_id)
+    run = session.scalar(
+        select(AgentRun)
+        .options(
+            selectinload(AgentRun.agent),
+            selectinload(AgentRun.agent_version),
+        )
+        .where(AgentRun.id == run_id)
+    )
     if run is None:
         raise LookupError(f"Unknown agent run id: {run_id}")
     is_stale = _run_is_stale(session, run)
+
+    agent = run.agent
+    agent_version = run.agent_version
+
+    agent_summary: dict[str, Any] | None = None
+    if agent is not None:
+        agent_summary = {
+            "id": agent.id,
+            "name": agent.name,
+            "description": agent.description,
+        }
+
+    agent_version_summary: dict[str, Any] | None = None
+    if agent_version is not None:
+        agent_version_summary = {
+            "id": agent_version.id,
+            "agent_id": agent_version.agent_id,
+            "version_number": agent_version.version_number,
+            "semantic_version": agent_version.semantic_version,
+            "status": agent_version.status,
+            "model": agent_version.model,
+        }
 
     steps = session.scalars(
         select(AgentRunStep)
@@ -374,6 +514,10 @@ def get_run_detail(session: Session, run_id: str) -> AgentRunDetail:
     detail = AgentRunDetail(
         id=run.id,
         incident_id=run.incident_id,
+        agent_id=run.agent_id,
+        agent_version_id=run.agent_version_id,
+        agent=agent_summary,
+        agent_version=agent_version_summary,
         status=run.status,
         is_stale=is_stale,
         trace_id=run.trace_id,
@@ -521,10 +665,10 @@ def _run_last_activity_at(session: Session, run: AgentRun) -> datetime:
 
 
 def _latest_reusable_run_id(
-    session: Session, incident_id: str, *, active_only: bool = False
+    session: Session, incident_id: str, *, active_only: bool = False, agent_version_id: str | None = None
 ) -> str | None:
     statuses = ACTIVE_RUN_STATUSES if active_only else (*ACTIVE_RUN_STATUSES, "succeeded")
-    return session.scalar(
+    stmt = (
         select(AgentRun.id)
         .where(
             AgentRun.incident_id == incident_id,
@@ -533,6 +677,9 @@ def _latest_reusable_run_id(
         .order_by(AgentRun.created_at.desc(), AgentRun.id.desc())
         .limit(1)
     )
+    if agent_version_id is not None:
+        stmt = stmt.where(AgentRun.agent_version_id == agent_version_id)
+    return session.scalar(stmt)
 
 
 def backfill_report_actions(session: Session, run_id: str) -> None:

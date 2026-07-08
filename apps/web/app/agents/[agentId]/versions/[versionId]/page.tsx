@@ -1,10 +1,32 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
-import { getAgent, getAgentVersion } from '@/lib/api';
+import { publishAgentVersion, saveAgentVersionDraft } from '@/app/actions';
+import { getAgent, getAgentVersion, listAgentVersions } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
 
 export const dynamic = 'force-dynamic';
+
+const ALL_TOOL_IDS = [
+  'query_revenue_metrics',
+  'fetch_account_details',
+  'search_docs',
+  'fetch_support_tickets',
+];
+
+const TOOL_LABELS: Record<string, string> = {
+  query_revenue_metrics: 'Query revenue metrics',
+  fetch_account_details: 'Fetch account details',
+  search_docs: 'Search knowledge docs',
+  fetch_support_tickets: 'Fetch support tickets',
+};
+
+const COMMON_MODELS = [
+  'gpt-4o-mini',
+  'gpt-4o',
+  'claude-3-5-sonnet-latest',
+  'claude-3-haiku-latest',
+];
 
 function versionBadge(status: string) {
   if (status === 'published') return 'action-status action-executed';
@@ -14,14 +36,31 @@ function versionBadge(status: string) {
 
 export default async function AgentVersionPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ agentId: string; versionId: string }>;
+  searchParams?: Promise<{
+    draft_saved?: string;
+    publish_error?: string;
+    version_error?: string;
+  }>;
 }) {
   const { agentId, versionId } = await params;
+  const resolvedSearchParams = await searchParams;
+  const draftSaved = resolvedSearchParams?.draft_saved === '1';
+  const publishError =
+    typeof resolvedSearchParams?.publish_error === 'string'
+      ? resolvedSearchParams.publish_error
+      : null;
+  const versionError =
+    typeof resolvedSearchParams?.version_error === 'string'
+      ? resolvedSearchParams.version_error
+      : null;
 
-  const [agentResult, versionResult] = await Promise.all([
+  const [agentResult, versionResult, versionsResult] = await Promise.all([
     getAgent(agentId),
     getAgentVersion(agentId, versionId),
+    listAgentVersions(agentId, { limit: 50 }),
   ]);
 
   if (!agentResult.ok || !versionResult.ok) {
@@ -49,6 +88,8 @@ export default async function AgentVersionPage({
 
   const agent = agentResult.data;
   const version = versionResult.data;
+  const versions = versionsResult.ok ? versionsResult.data.versions : [];
+  const drafts = versions.filter((v) => v.status === 'draft');
 
   return (
     <main className="dashboard-shell">
@@ -84,7 +125,44 @@ export default async function AgentVersionPage({
             max_tokens: {version.max_tokens}
           </p>
         </div>
+        {version.status === 'draft' ? (
+          <div className="header-actions">
+            <form action={publishAgentVersion}>
+              <input type="hidden" name="agent_id" value={agent.id} />
+              <input type="hidden" name="version_id" value={version.id} />
+              <button className="action-button" type="submit">
+                Publish version
+              </button>
+            </form>
+          </div>
+        ) : (
+          <div className="header-actions">
+            <form action={saveAgentVersionDraft}>
+              <input type="hidden" name="agent_id" value={agent.id} />
+              <input type="hidden" name="base_version_id" value={version.id} />
+              <button className="action-button secondary-action" type="submit">
+                New draft from this version
+              </button>
+            </form>
+          </div>
+        )}
       </header>
+
+      {draftSaved ? (
+        <section className="panel" aria-live="polite">
+          <div className="panel-message">Draft saved successfully.</div>
+        </section>
+      ) : null}
+      {publishError ? (
+        <section className="panel anomaly-panel" aria-live="polite">
+          <div className="panel-message error-detail">Publish failed: {publishError}</div>
+        </section>
+      ) : null}
+      {versionError ? (
+        <section className="panel anomaly-panel" aria-live="polite">
+          <div className="panel-message error-detail">Save failed: {versionError}</div>
+        </section>
+      ) : null}
 
       <section className="snapshot-bar">
         <div>
@@ -115,113 +193,263 @@ export default async function AgentVersionPage({
         </div>
       </section>
 
-      <section className="report-grid">
-        <section className="panel">
-          <div className="panel-header">
-            <h2>System prompt</h2>
-          </div>
-          <div className="report-body">
-            <pre
-              style={{
-                margin: 0,
-                padding: '16px',
-                border: '1px solid var(--border)',
-                borderRadius: '8px',
-                background: '#f8fafc',
-                color: 'var(--foreground)',
-                fontSize: '13px',
-                lineHeight: '1.6',
-                whiteSpace: 'pre-wrap',
-                overflowWrap: 'anywhere',
-                maxHeight: '600px',
-                overflow: 'auto',
-              }}
-            >
-              {version.system_prompt || '(empty)'}
-            </pre>
-          </div>
-        </section>
+      {version.status === 'draft' ? (
+        <form action={saveAgentVersionDraft} className="report-grid">
+          <input type="hidden" name="agent_id" value={agent.id} />
+          <input type="hidden" name="version_id" value={version.id} />
+          <input type="hidden" name="return_to" value={`/agents/${agent.id}/versions/${version.id}`} />
 
-        <section className="panel">
-          <div className="panel-header">
-            <h2>Configuration</h2>
-          </div>
-          <div className="category-stack">
-            <div className="category-row">
-              <div className="category-label">
-                <span>Forked from</span>
-              </div>
-              <div>
-                {version.forked_from_version_id ? (
-                  <code>{version.forked_from_version_id}</code>
-                ) : (
-                  <span style={{ color: 'var(--muted)' }}>scratch</span>
-                )}
-              </div>
+          <section className="panel report-panel-wide">
+            <div className="panel-header">
+              <h2>System prompt</h2>
+              <span>Edit the investigation instructions</span>
             </div>
-            <div className="category-row">
-              <div className="category-label">
-                <span>Published by</span>
-              </div>
-              <div>
-                {version.published_by ? (
-                  <code>{version.published_by}</code>
-                ) : (
-                  <span style={{ color: 'var(--muted)' }}>—</span>
-                )}
-              </div>
+            <div className="report-body">
+              <textarea
+                name="system_prompt"
+                className="config-textarea"
+                defaultValue={version.system_prompt}
+                rows={18}
+                aria-label="System prompt"
+              />
             </div>
-            <div className="category-row">
-              <div className="category-label">
-                <span>Enabled tools</span>
-              </div>
-              <div>
-                {version.enabled_tool_ids.length === 0 ? (
-                  <span style={{ color: 'var(--muted)' }}>none configured</span>
-                ) : (
-                  <ul style={{ margin: 0, paddingLeft: '20px' }}>
-                    {version.enabled_tool_ids.map((toolId) => (
-                      <li key={toolId}>
-                        <code>{toolId}</code>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </div>
-            <div className="category-row">
-              <div className="category-label">
-                <span>Allowed scopes</span>
-              </div>
-              <div>
-                {version.allowed_scopes.length === 0 ? (
-                  <span style={{ color: 'var(--muted)' }}>none configured</span>
-                ) : (
-                  <ul style={{ margin: 0, paddingLeft: '20px' }}>
-                    {version.allowed_scopes.map((scope) => (
-                      <li key={scope}>
-                        <code>{scope}</code>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </div>
-          </div>
-        </section>
-      </section>
+          </section>
 
-      {version.status === 'published' ? (
-        <section className="panel" style={{ marginTop: '16px' }}>
-          <div className="panel-header">
-            <h2>Immutability notice</h2>
-          </div>
-          <div className="panel-message">
-            Published versions are frozen and cannot be modified. Create a new draft from this
-            version to iterate on the prompt or configuration, then publish it as the next version.
-          </div>
+          <section className="panel">
+            <div className="panel-header">
+              <h2>Model configuration</h2>
+            </div>
+            <div className="form-stack">
+              <label className="field-label">
+                <span>Model</span>
+                <input
+                  type="text"
+                  name="model"
+                  className="field-input"
+                  defaultValue={version.model}
+                  list="model-suggestions"
+                />
+                <datalist id="model-suggestions">
+                  {COMMON_MODELS.map((m) => (
+                    <option key={m} value={m} />
+                  ))}
+                </datalist>
+              </label>
+              <label className="field-label">
+                <span>Temperature ({version.temperature})</span>
+                <input
+                  type="range"
+                  name="temperature"
+                  min="0"
+                  max="2"
+                  step="0.1"
+                  defaultValue={version.temperature}
+                  className="field-range"
+                />
+              </label>
+              <label className="field-label">
+                <span>Max tokens</span>
+                <input
+                  type="number"
+                  name="max_tokens"
+                  className="field-input"
+                  defaultValue={version.max_tokens}
+                  min="100"
+                  max="16384"
+                />
+              </label>
+            </div>
+          </section>
+
+          <section className="panel report-panel-wide">
+            <div className="panel-header">
+              <h2>Enabled tools</h2>
+              <span>Select which tools this agent version can call during investigation</span>
+            </div>
+            <input type="hidden" name="enabled_tool_ids_present" value="1" />
+            <div className="form-stack">
+              {ALL_TOOL_IDS.map((toolId) => (
+                <label key={toolId} className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    name="enabled_tool_ids"
+                    value={toolId}
+                    defaultChecked={version.enabled_tool_ids.includes(toolId)}
+                  />
+                  <span>
+                    <strong>{TOOL_LABELS[toolId] ?? toolId}</strong>
+                    <code style={{ marginLeft: '8px', color: 'var(--muted)' }}>{toolId}</code>
+                  </span>
+                </label>
+              ))}
+            </div>
+            <p className="panel-message" style={{ marginTop: '12px' }}>
+              Note: unchecked tools will return empty/neutral evidence during investigation.
+              The incident and root-cause diagnosis tool is always available.
+            </p>
+          </section>
+
+          <section className="panel report-panel-wide">
+            <div className="panel-header">
+              <h2>Fork / version info</h2>
+            </div>
+            <div className="category-stack">
+              <div className="category-row">
+                <div className="category-label">
+                  <span>Forked from</span>
+                </div>
+                <div>
+                  {version.forked_from_version_id ? (
+                    <code>{version.forked_from_version_id}</code>
+                  ) : (
+                    <span style={{ color: 'var(--muted)' }}>scratch</span>
+                  )}
+                </div>
+              </div>
+              <div className="category-row">
+                <div className="category-label">
+                  <span>Current enabled tools</span>
+                </div>
+                <div>
+                  {version.enabled_tool_ids.length === 0 ? (
+                    <span style={{ color: 'var(--muted)' }}>none</span>
+                  ) : (
+                    version.enabled_tool_ids.join(', ')
+                  )}
+                </div>
+              </div>
+            </div>
+            <div style={{ marginTop: '16px', display: 'flex', gap: '8px' }}>
+              <button className="action-button" type="submit">
+                Save draft
+              </button>
+            </div>
+          </section>
+        </form>
+      ) : (
+        <section className="report-grid">
+          <section className="panel">
+            <div className="panel-header">
+              <h2>System prompt</h2>
+            </div>
+            <div className="report-body">
+              <pre
+                style={{
+                  margin: 0,
+                  padding: '16px',
+                  border: '1px solid var(--border)',
+                  borderRadius: '8px',
+                  background: '#f8fafc',
+                  color: 'var(--foreground)',
+                  fontSize: '13px',
+                  lineHeight: '1.6',
+                  whiteSpace: 'pre-wrap',
+                  overflowWrap: 'anywhere',
+                  maxHeight: '600px',
+                  overflow: 'auto',
+                }}
+              >
+                {version.system_prompt || '(empty)'}
+              </pre>
+            </div>
+          </section>
+
+          <section className="panel">
+            <div className="panel-header">
+              <h2>Configuration</h2>
+            </div>
+            <div className="category-stack">
+              <div className="category-row">
+                <div className="category-label">
+                  <span>Forked from</span>
+                </div>
+                <div>
+                  {version.forked_from_version_id ? (
+                    <code>{version.forked_from_version_id}</code>
+                  ) : (
+                    <span style={{ color: 'var(--muted)' }}>scratch</span>
+                  )}
+                </div>
+              </div>
+              <div className="category-row">
+                <div className="category-label">
+                  <span>Published by</span>
+                </div>
+                <div>
+                  {version.published_by ? (
+                    <code>{version.published_by}</code>
+                  ) : (
+                    <span style={{ color: 'var(--muted)' }}>—</span>
+                  )}
+                </div>
+              </div>
+              <div className="category-row">
+                <div className="category-label">
+                  <span>Enabled tools</span>
+                </div>
+                <div>
+                  {version.enabled_tool_ids.length === 0 ? (
+                    <span style={{ color: 'var(--muted)' }}>none configured</span>
+                  ) : (
+                    <ul style={{ margin: 0, paddingLeft: '20px' }}>
+                      {version.enabled_tool_ids.map((toolId) => (
+                        <li key={toolId}>
+                          {TOOL_LABELS[toolId] ?? toolId}{' '}
+                          <code style={{ color: 'var(--muted)' }}>{toolId}</code>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+              <div className="category-row">
+                <div className="category-label">
+                  <span>Allowed scopes</span>
+                </div>
+                <div>
+                  {version.allowed_scopes.length === 0 ? (
+                    <span style={{ color: 'var(--muted)' }}>none configured</span>
+                  ) : (
+                    <ul style={{ margin: 0, paddingLeft: '20px' }}>
+                      {version.allowed_scopes.map((scope) => (
+                        <li key={scope}>
+                          <code>{scope}</code>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section className="panel report-panel-wide">
+            <div className="panel-header">
+              <h2>Immutability notice</h2>
+            </div>
+            <div className="panel-message">
+              Published versions are frozen and cannot be modified. Use the &quot;New draft from
+              this version&quot; button above to iterate on the prompt or configuration, then
+              publish it as the next version.
+            </div>
+            {drafts.length > 0 ? (
+              <div style={{ marginTop: '16px' }}>
+                <h3 style={{ fontSize: '14px', marginBottom: '8px' }}>Open drafts for this agent</h3>
+                <ul style={{ margin: 0, paddingLeft: '20px' }}>
+                  {drafts.map((d) => (
+                    <li key={d.id}>
+                      <Link href={`/agents/${agent.id}/versions/${d.id}`}>
+                        Draft <code>{d.id.slice(0, 8)}</code>
+                      </Link>{' '}
+                      · model: {d.model}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </section>
         </section>
-      ) : null}
+      )}
     </main>
   );
 }

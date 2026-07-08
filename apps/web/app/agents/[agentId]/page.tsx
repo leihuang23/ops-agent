@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
+import { saveAgentVersionDraft } from '@/app/actions';
 import { getAgent } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
 
@@ -57,6 +58,17 @@ export default async function AgentDetailPage({
             <code>{agent.id}</code> · default model: {agent.default_model} · created{' '}
             {formatDateTime(agent.created_at)}
           </p>
+        </div>
+        <div className="header-actions">
+          <form action={saveAgentVersionDraft}>
+            <input type="hidden" name="agent_id" value={agent.id} />
+            {agent.latest_published_version ? (
+              <input type="hidden" name="base_version_id" value={agent.latest_published_version.id} />
+            ) : null}
+            <button className="action-button" type="submit">
+              New draft version
+            </button>
+          </form>
         </div>
       </header>
 

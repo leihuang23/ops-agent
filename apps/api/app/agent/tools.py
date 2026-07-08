@@ -12,6 +12,16 @@ from app.knowledge.search import search_knowledge
 from app.models import Account, Invoice, Subscription, SupportTicket
 
 
+TOOL_IDS: frozenset[str] = frozenset(
+    {
+        "query_revenue_metrics",
+        "fetch_account_details",
+        "search_docs",
+        "fetch_support_tickets",
+    }
+)
+
+
 class SqlEvidence(BaseModel):
     title: str
     reference_id: str

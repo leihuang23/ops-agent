@@ -6,9 +6,17 @@ from typing import Any, Protocol
 
 import httpx
 
-from app.llm.prompts import INVESTIGATION_SYSTEM_PROMPT
+from app.core.config import get_settings
+from app.llm.prompts import compose_system_prompt
 from app.llm.schemas import LLMResponse, LLMUsage
 from app.llm.tokenizer import count_tokens
+
+
+class VersionConfigLike(Protocol):
+    model: str | None
+    temperature: float | None
+    max_tokens: int | None
+    system_prompt: str | None
 
 
 class LLMClient(Protocol):
@@ -77,6 +85,7 @@ class OpenAIClient:
         max_tokens: int = 1024,
         timeout_seconds: int = 30,
         transport: httpx.BaseTransport | None = None,
+        system_prompt: str | None = None,
     ) -> None:
         self.provider = "openai"
         self.model = model
@@ -84,6 +93,7 @@ class OpenAIClient:
         self._temperature = temperature
         self._max_tokens = max_tokens
         self._timeout = timeout_seconds
+        self._system_prompt = compose_system_prompt(system_prompt)
         self._http = _HTTPClient(transport=transport)
 
     def complete(self, prompt: str) -> tuple[LLMResponse, LLMUsage]:
@@ -91,7 +101,7 @@ class OpenAIClient:
         payload = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": INVESTIGATION_SYSTEM_PROMPT},
+                {"role": "system", "content": self._system_prompt},
                 {"role": "user", "content": prompt},
             ],
             "temperature": self._temperature,
@@ -131,6 +141,7 @@ class AnthropicClient:
         max_tokens: int = 1024,
         timeout_seconds: int = 30,
         transport: httpx.BaseTransport | None = None,
+        system_prompt: str | None = None,
     ) -> None:
         self.provider = "anthropic"
         self.model = model
@@ -138,6 +149,7 @@ class AnthropicClient:
         self._temperature = temperature
         self._max_tokens = max_tokens
         self._timeout = timeout_seconds
+        self._system_prompt = compose_system_prompt(system_prompt)
         self._http = _HTTPClient(transport=transport)
 
     def complete(self, prompt: str) -> tuple[LLMResponse, LLMUsage]:
@@ -146,7 +158,7 @@ class AnthropicClient:
             "model": self.model,
             "max_tokens": self._max_tokens,
             "temperature": self._temperature,
-            "system": INVESTIGATION_SYSTEM_PROMPT,
+            "system": self._system_prompt,
             "messages": [{"role": "user", "content": prompt}],
         }
         raw = self._http.post(
@@ -187,3 +199,43 @@ def parse_llm_response(content: str) -> LLMResponse:
         text = "\n".join(lines).strip()
     parsed = json.loads(text)
     return LLMResponse.model_validate(parsed)
+
+
+def build_llm_client_for_version(version_config: VersionConfigLike) -> LLMClient:
+    settings = get_settings()
+    model = version_config.model or settings.llm_model
+    temperature = (
+        version_config.temperature
+        if version_config.temperature is not None
+        else settings.llm_temperature
+    )
+    max_tokens = (
+        version_config.max_tokens
+        if version_config.max_tokens is not None
+        else settings.llm_max_tokens
+    )
+    system_prompt = version_config.system_prompt or None
+
+    if settings.llm_provider == "openai":
+        if not settings.openai_api_key:
+            return NoopLLMClient()
+        return OpenAIClient(
+            api_key=settings.openai_api_key,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout_seconds=settings.llm_timeout_seconds,
+            system_prompt=system_prompt,
+        )
+    if settings.llm_provider == "anthropic":
+        if not settings.anthropic_api_key:
+            return NoopLLMClient()
+        return AnthropicClient(
+            api_key=settings.anthropic_api_key,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout_seconds=settings.llm_timeout_seconds,
+            system_prompt=system_prompt,
+        )
+    return NoopLLMClient()

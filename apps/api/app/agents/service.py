@@ -30,6 +30,40 @@ class ImmutableVersionError(ValueError):
     pass
 
 
+class InvalidVersionConfigError(ValueError):
+    pass
+
+
+ALLOWED_MODELS: frozenset[str] = frozenset(
+    {
+        "gpt-4o-mini",
+        "gpt-4o",
+        "claude-3-5-sonnet-latest",
+        "claude-3-haiku-20240307",
+    }
+)
+
+
+def _validate_version_config(
+    *,
+    model: str | None,
+    enabled_tool_ids: list[str] | None,
+) -> None:
+    from app.agent.tools import TOOL_IDS
+
+    if model is not None and model not in ALLOWED_MODELS:
+        allowed = ", ".join(sorted(ALLOWED_MODELS))
+        raise InvalidVersionConfigError(
+            f"Unsupported model: {model!r}. Allowed models: {allowed}"
+        )
+    if enabled_tool_ids is not None:
+        unknown = set(enabled_tool_ids) - set(TOOL_IDS)
+        if unknown:
+            raise InvalidVersionConfigError(
+                "Unknown tool ids: " + ", ".join(sorted(unknown))
+            )
+
+
 class DuplicateAgentError(ValueError):
     pass
 
@@ -360,6 +394,8 @@ def create_version(
             allowed_scopes = []
         forked_from = None
 
+    _validate_version_config(model=model, enabled_tool_ids=enabled_tool_ids)
+
     draft_count = sum(1 for v in agent.versions if v.status == "draft")
     version_id = f"{agent_id}_draft_{draft_count + 1}_{secrets.token_hex(3)}"
     new_version = AgentVersion(
@@ -397,8 +433,12 @@ def update_version(
     version_id: str,
     payload: AgentVersionUpdate,
 ) -> VersionDetail:
-    version = session.get(AgentVersion, version_id)
-    if version is None or version.agent_id != agent_id:
+    version = session.scalar(
+        select(AgentVersion)
+        .where(AgentVersion.id == version_id, AgentVersion.agent_id == agent_id)
+        .with_for_update()
+    )
+    if version is None:
         raise VersionNotFoundError(f"Unknown version: {version_id}")
     if version.status == "published":
         raise ImmutableVersionError(
@@ -406,6 +446,10 @@ def update_version(
         )
 
     now = _utcnow()
+    _validate_version_config(
+        model=payload.model,
+        enabled_tool_ids=payload.enabled_tool_ids,
+    )
     if payload.system_prompt is not None:
         version.system_prompt = payload.system_prompt
     if payload.model is not None:
@@ -439,15 +483,21 @@ def publish_version(
     version_id: str,
     published_by: str = "system",
 ) -> VersionDetail:
-    version = session.get(AgentVersion, version_id)
-    if version is None or version.agent_id != agent_id:
+    agent = session.scalar(
+        select(Agent).where(Agent.id == agent_id).with_for_update()
+    )
+    if agent is None:
+        raise AgentNotFoundError(f"Unknown agent id: {agent_id}")
+
+    version = session.scalar(
+        select(AgentVersion)
+        .where(AgentVersion.id == version_id, AgentVersion.agent_id == agent_id)
+        .with_for_update()
+    )
+    if version is None:
         raise VersionNotFoundError(f"Unknown version: {version_id}")
     if version.status == "published":
         raise ImmutableVersionError("Version is already published.")
-
-    agent = session.get(Agent, agent_id)
-    if agent is None:
-        raise AgentNotFoundError(f"Unknown agent id: {agent_id}")
 
     now = _utcnow()
     next_number = (
@@ -480,3 +530,28 @@ def publish_version(
         ) from exc
     session.refresh(version)
     return _version_detail(version)
+
+
+DEFAULT_AGENT_ID = "revenue-ops-agent"
+DEFAULT_AGENT_VERSION_ID = "revenue-ops-agent_v1"
+
+
+def get_published_version(
+    session: Session, agent_version_id: str
+) -> AgentVersion | None:
+    version = session.get(AgentVersion, agent_version_id)
+    if version is None or version.status != "published":
+        return None
+    return version
+
+
+def get_default_published_version(session: Session) -> AgentVersion | None:
+    return session.scalar(
+        select(AgentVersion)
+        .where(
+            AgentVersion.status == "published",
+            AgentVersion.agent_id == DEFAULT_AGENT_ID,
+        )
+        .order_by(AgentVersion.version_number.desc(), AgentVersion.published_at.desc())
+        .limit(1)
+    )

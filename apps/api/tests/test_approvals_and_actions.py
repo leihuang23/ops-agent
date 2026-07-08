@@ -15,6 +15,7 @@ from app.agent.schemas import (
     ReportAffectedAccount,
     ReportEvidence,
 )
+from app.agents.service import DEFAULT_AGENT_ID, DEFAULT_AGENT_VERSION_ID
 from app.approvals.schemas import ApprovalDecisionCreate
 from app.approvals.service import approve_request, propose_actions_for_report, reject_request
 from app.db.base import Base
@@ -51,6 +52,8 @@ def client(
         run = AgentRun(
             id="run_action_contract",
             incident_id=incident_id,
+            agent_id=DEFAULT_AGENT_ID,
+            agent_version_id=DEFAULT_AGENT_VERSION_ID,
             status="succeeded",
             trace_id="local-test-trace",
             input_payload={"incident_id": incident_id},
@@ -255,6 +258,8 @@ def test_report_action_proposal_repairs_partial_action_sets(
         run = AgentRun(
             id="run_partial_actions",
             incident_id=incident_id,
+            agent_id=DEFAULT_AGENT_ID,
+            agent_version_id=DEFAULT_AGENT_VERSION_ID,
             status="succeeded",
             trace_id="local-test-trace",
             input_payload={"incident_id": incident_id},
@@ -313,6 +318,8 @@ def test_customer_email_payload_carries_report_evidence_references(
         run = AgentRun(
             id="run_evidence_payload",
             incident_id=incident_id,
+            agent_id=DEFAULT_AGENT_ID,
+            agent_version_id=DEFAULT_AGENT_VERSION_ID,
             status="succeeded",
             trace_id="local-test-trace",
             input_payload={"incident_id": incident_id},
@@ -404,6 +411,8 @@ def _seed_pending_high_risk_approval(
         run = AgentRun(
             id=run_id,
             incident_id=incident_id,
+            agent_id=DEFAULT_AGENT_ID,
+            agent_version_id=DEFAULT_AGENT_VERSION_ID,
             status="succeeded",
             trace_id="local-test-trace",
             input_payload={"incident_id": incident_id},
