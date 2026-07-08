@@ -793,9 +793,9 @@ def _backfill_agent_run_versions(
     session.execute(
         update(AgentRun)
         .where(
-            (AgentRun.agent_id.is_(None)) | (AgentRun.agent_version_id.is_(None))
-        )
-        .values(agent_id=agent_id, agent_version_id=agent_version_id)
+            (AgentRun.agent_id.is_(None))
+            | ((AgentRun.agent_id == agent_id) & (AgentRun.agent_version_id.is_(None)))
+        ).values(agent_id=agent_id, agent_version_id=agent_version_id)
     )
 
 
