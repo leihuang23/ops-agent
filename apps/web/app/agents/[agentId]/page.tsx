@@ -65,13 +65,6 @@ export default async function AgentDetailPage({
             {agent.latest_published_version ? (
               <input type="hidden" name="base_version_id" value={agent.latest_published_version.id} />
             ) : null}
-            <input
-              name="operator_token"
-              type="password"
-              className="field-input"
-              placeholder="Operator token"
-              autoComplete="off"
-            />
             <button className="action-button" type="submit">
               New draft version
             </button>

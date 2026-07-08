@@ -1,15 +1,9 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { cookies } from 'next/headers';
 
-import { publishAgentVersion, saveAgentVersionDraft, unlockAgentVersionDetail } from '@/app/actions';
-import { getAgent, getAgentVersion, getAgentVersionDetail, listAgentVersions } from '@/lib/api';
-import { VERSION_DETAIL_OPERATOR_COOKIE } from '@/lib/demoOperatorCookie';
+import { publishAgentVersion, saveAgentVersionDraft } from '@/app/actions';
+import { getAgent, getAgentVersion, listAgentVersions } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
-import {
-  loadAgentVersionForPage,
-  shouldRequestProtectedDetail,
-} from './versionLoader';
 
 export const dynamic = 'force-dynamic';
 
@@ -30,13 +24,7 @@ const TOOL_LABELS: Record<string, string> = {
 const COMMON_MODELS = [
   'gpt-4o-mini',
   'gpt-4o',
-  'claude-fable-5',
-  'claude-opus-4-8',
-  'claude-sonnet-5',
-  'claude-haiku-4-5',
-  'claude-haiku-4-5-20251001',
   'claude-3-5-sonnet-latest',
-  'claude-3-5-haiku-latest',
   'claude-3-haiku-20240307',
 ];
 
@@ -52,7 +40,6 @@ export default async function AgentVersionPage({
 }: {
   params: Promise<{ agentId: string; versionId: string }>;
   searchParams?: Promise<{
-    detail_unlocked?: string;
     draft_saved?: string;
     publish_error?: string;
     version_error?: string;
@@ -60,10 +47,7 @@ export default async function AgentVersionPage({
 }) {
   const { agentId, versionId } = await params;
   const resolvedSearchParams = await searchParams;
-  const detailUnlocked = resolvedSearchParams?.detail_unlocked === '1';
   const draftSaved = resolvedSearchParams?.draft_saved === '1';
-  const cookieStore = await cookies();
-  const operatorToken = cookieStore.get(VERSION_DETAIL_OPERATOR_COOKIE)?.value ?? null;
   const publishError =
     typeof resolvedSearchParams?.publish_error === 'string'
       ? resolvedSearchParams.publish_error
@@ -73,27 +57,11 @@ export default async function AgentVersionPage({
       ? resolvedSearchParams.version_error
       : null;
 
-  const versionRequest = loadAgentVersionForPage({
-    agentId,
-    versionId,
-    operatorToken,
-    shouldRequestDetail: shouldRequestProtectedDetail({
-      operatorToken,
-      detailUnlocked,
-      draftSaved,
-      publishError,
-      versionError,
-    }),
-    getSummary: getAgentVersion,
-    getDetail: getAgentVersionDetail,
-  });
-
-  const [agentResult, versionLoadResult, versionsResult] = await Promise.all([
+  const [agentResult, versionResult, versionsResult] = await Promise.all([
     getAgent(agentId),
-    versionRequest,
+    getAgentVersion(agentId, versionId),
     listAgentVersions(agentId, { limit: 50 }),
   ]);
-  const { versionResult, detailUnavailableMessage } = versionLoadResult;
 
   if (!agentResult.ok || !versionResult.ok) {
     const errorMessage = !agentResult.ok
@@ -122,21 +90,6 @@ export default async function AgentVersionPage({
   const version = versionResult.data;
   const versions = versionsResult.ok ? versionsResult.data.versions : [];
   const drafts = versions.filter((v) => v.status === 'draft');
-  const canEditVersion =
-    typeof version.system_prompt === 'string' &&
-    typeof version.temperature === 'number' &&
-    typeof version.max_tokens === 'number' &&
-    Array.isArray(version.enabled_tool_ids);
-  const temperatureLabel =
-    typeof version.temperature === 'number' ? String(version.temperature) : 'operator-only';
-  const maxTokensLabel =
-    typeof version.max_tokens === 'number' ? String(version.max_tokens) : 'operator-only';
-  const enabledToolIds = Array.isArray(version.enabled_tool_ids)
-    ? version.enabled_tool_ids
-    : null;
-  const allowedScopes = Array.isArray(version.allowed_scopes)
-    ? version.allowed_scopes
-    : null;
 
   return (
     <main className="dashboard-shell">
@@ -168,39 +121,15 @@ export default async function AgentVersionPage({
           </h1>
           <p className="approval-meta" style={{ marginTop: '8px' }}>
             <span className={versionBadge(version.status)}>{version.status}</span>{' '}
-            <code>{version.id}</code> · model: {version.model} · temp: {temperatureLabel} ·
-            max_tokens: {maxTokensLabel}
+            <code>{version.id}</code> · model: {version.model} · temp: {version.temperature} ·
+            max_tokens: {version.max_tokens}
           </p>
         </div>
-	        {!canEditVersion ? (
-	          <div className="header-actions">
-	            <form action={unlockAgentVersionDetail}>
-	              <input type="hidden" name="agent_id" value={agent.id} />
-	              <input type="hidden" name="version_id" value={version.id} />
-	              <input
-	                name="operator_token"
-	                type="password"
-                className="field-input"
-                placeholder="Operator token"
-                autoComplete="off"
-              />
-              <button className="action-button secondary-action" type="submit">
-                Unlock editing
-              </button>
-            </form>
-          </div>
-        ) : version.status === 'draft' ? (
+        {version.status === 'draft' ? (
           <div className="header-actions">
             <form action={publishAgentVersion}>
               <input type="hidden" name="agent_id" value={agent.id} />
               <input type="hidden" name="version_id" value={version.id} />
-              <input
-                name="operator_token"
-                type="password"
-                className="field-input"
-                placeholder="Operator token"
-                autoComplete="off"
-              />
               <button className="action-button" type="submit">
                 Publish version
               </button>
@@ -211,13 +140,6 @@ export default async function AgentVersionPage({
             <form action={saveAgentVersionDraft}>
               <input type="hidden" name="agent_id" value={agent.id} />
               <input type="hidden" name="base_version_id" value={version.id} />
-              <input
-                name="operator_token"
-                type="password"
-                className="field-input"
-                placeholder="Operator token"
-                autoComplete="off"
-              />
               <button className="action-button secondary-action" type="submit">
                 New draft from this version
               </button>
@@ -226,16 +148,11 @@ export default async function AgentVersionPage({
         )}
       </header>
 
-	      {draftSaved ? (
-	        <section className="panel" aria-live="polite">
-	          <div className="panel-message">Draft saved successfully.</div>
-	        </section>
-	      ) : null}
-	      {detailUnlocked && canEditVersion ? (
-	        <section className="panel" aria-live="polite">
-	          <div className="panel-message">Operator detail unlocked for this version.</div>
-	        </section>
-	      ) : null}
+      {draftSaved ? (
+        <section className="panel" aria-live="polite">
+          <div className="panel-message">Draft saved successfully.</div>
+        </section>
+      ) : null}
       {publishError ? (
         <section className="panel anomaly-panel" aria-live="polite">
           <div className="panel-message error-detail">Publish failed: {publishError}</div>
@@ -244,13 +161,6 @@ export default async function AgentVersionPage({
       {versionError ? (
         <section className="panel anomaly-panel" aria-live="polite">
           <div className="panel-message error-detail">Save failed: {versionError}</div>
-        </section>
-      ) : null}
-      {detailUnavailableMessage ? (
-        <section className="panel anomaly-panel" aria-live="polite">
-          <div className="panel-message error-detail">
-            Version detail temporarily unavailable: {detailUnavailableMessage}
-          </div>
         </section>
       ) : null}
 
@@ -265,11 +175,11 @@ export default async function AgentVersionPage({
         </div>
         <div>
           <span>Temperature</span>
-          <strong>{temperatureLabel}</strong>
+          <strong>{version.temperature}</strong>
         </div>
         <div>
           <span>Max tokens</span>
-          <strong>{maxTokensLabel}</strong>
+          <strong>{version.max_tokens}</strong>
         </div>
         <div>
           <span>Created</span>
@@ -283,7 +193,7 @@ export default async function AgentVersionPage({
         </div>
       </section>
 
-      {version.status === 'draft' && canEditVersion ? (
+      {version.status === 'draft' ? (
         <form action={saveAgentVersionDraft} className="report-grid">
           <input type="hidden" name="agent_id" value={agent.id} />
           <input type="hidden" name="version_id" value={version.id} />
@@ -364,7 +274,7 @@ export default async function AgentVersionPage({
                     type="checkbox"
                     name="enabled_tool_ids"
                     value={toolId}
-                    defaultChecked={enabledToolIds?.includes(toolId) ?? false}
+                    defaultChecked={version.enabled_tool_ids.includes(toolId)}
                   />
                   <span>
                     <strong>{TOOL_LABELS[toolId] ?? toolId}</strong>
@@ -401,36 +311,21 @@ export default async function AgentVersionPage({
                   <span>Current enabled tools</span>
                 </div>
                 <div>
-                  {enabledToolIds === null ? (
-                    <span style={{ color: 'var(--muted)' }}>operator-only</span>
-                  ) : enabledToolIds.length === 0 ? (
+                  {version.enabled_tool_ids.length === 0 ? (
                     <span style={{ color: 'var(--muted)' }}>none</span>
                   ) : (
-                    enabledToolIds.join(', ')
+                    version.enabled_tool_ids.join(', ')
                   )}
                 </div>
               </div>
             </div>
             <div style={{ marginTop: '16px', display: 'flex', gap: '8px' }}>
-              <input
-                name="operator_token"
-                type="password"
-                className="field-input"
-                placeholder="Operator token"
-                autoComplete="off"
-              />
               <button className="action-button" type="submit">
                 Save draft
               </button>
             </div>
           </section>
         </form>
-      ) : version.status === 'draft' ? (
-        <section className="panel anomaly-panel">
-          <div className="panel-message error-detail">
-            Draft editing requires operator access.
-          </div>
-        </section>
       ) : (
         <section className="report-grid">
           <section className="panel">
@@ -438,11 +333,24 @@ export default async function AgentVersionPage({
               <h2>System prompt</h2>
             </div>
             <div className="report-body">
-              {typeof version.system_prompt === 'string' ? (
-                <pre className="prompt-block">{version.system_prompt}</pre>
-              ) : (
-                <div className="panel-message">System prompt requires operator access.</div>
-              )}
+              <pre
+                style={{
+                  margin: 0,
+                  padding: '16px',
+                  border: '1px solid var(--border)',
+                  borderRadius: '8px',
+                  background: '#f8fafc',
+                  color: 'var(--foreground)',
+                  fontSize: '13px',
+                  lineHeight: '1.6',
+                  whiteSpace: 'pre-wrap',
+                  overflowWrap: 'anywhere',
+                  maxHeight: '600px',
+                  overflow: 'auto',
+                }}
+              >
+                {version.system_prompt || '(empty)'}
+              </pre>
             </div>
           </section>
 
@@ -471,7 +379,7 @@ export default async function AgentVersionPage({
                   {version.published_by ? (
                     <code>{version.published_by}</code>
                   ) : (
-                    <span style={{ color: 'var(--muted)' }}>operator-only</span>
+                    <span style={{ color: 'var(--muted)' }}>—</span>
                   )}
                 </div>
               </div>
@@ -480,13 +388,11 @@ export default async function AgentVersionPage({
                   <span>Enabled tools</span>
                 </div>
                 <div>
-                  {enabledToolIds === null ? (
-                    <span style={{ color: 'var(--muted)' }}>operator-only</span>
-                  ) : enabledToolIds.length === 0 ? (
+                  {version.enabled_tool_ids.length === 0 ? (
                     <span style={{ color: 'var(--muted)' }}>none configured</span>
                   ) : (
                     <ul style={{ margin: 0, paddingLeft: '20px' }}>
-                      {enabledToolIds.map((toolId) => (
+                      {version.enabled_tool_ids.map((toolId) => (
                         <li key={toolId}>
                           {TOOL_LABELS[toolId] ?? toolId}{' '}
                           <code style={{ color: 'var(--muted)' }}>{toolId}</code>
@@ -501,13 +407,11 @@ export default async function AgentVersionPage({
                   <span>Allowed scopes</span>
                 </div>
                 <div>
-                  {allowedScopes === null ? (
-                    <span style={{ color: 'var(--muted)' }}>operator-only</span>
-                  ) : allowedScopes.length === 0 ? (
+                  {version.allowed_scopes.length === 0 ? (
                     <span style={{ color: 'var(--muted)' }}>none configured</span>
                   ) : (
                     <ul style={{ margin: 0, paddingLeft: '20px' }}>
-                      {allowedScopes.map((scope) => (
+                      {version.allowed_scopes.map((scope) => (
                         <li key={scope}>
                           <code>{scope}</code>
                         </li>

@@ -37,10 +37,6 @@ from app.incidents.service import get_incident_detail
 from app.models import AgentRun
 
 
-class LLMRuntimeError(RuntimeError):
-    """Raised when an enabled LLM provider fails during completion."""
-
-
 class InvestigationState(TypedDict, total=False):
     run_id: str
     incident_id: str
@@ -772,8 +768,6 @@ def _diagnose_with_llm(
     try:
         llm_response, usage = llm_client.complete(prompt)
     except Exception as exc:
-        if not isinstance(llm_client, NoopLLMClient):
-            raise LLMRuntimeError(str(exc)) from exc
         return None, LLMUsage(
             provider=getattr(llm_client, "provider", "unknown"),
             model=getattr(llm_client, "model", "unknown"),

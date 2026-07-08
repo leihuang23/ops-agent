@@ -14,7 +14,6 @@ from app.db.session import get_db
 from app.main import app
 from app.models import Agent, AgentVersion
 from app.seed import reseed_database
-from app.core.config import get_settings
 from app.agents.service import get_default_published_version
 from app.agent.persistence import utcnow_naive
 
@@ -244,7 +243,7 @@ class TestAgentDetail:
                 semantic_version=None,
                 status="published",
                 system_prompt="newer null source",
-                model="claude-sonnet-5",
+                model="claude-3-5-sonnet-latest",
                 temperature=0.2,
                 max_tokens=2048,
                 enabled_tool_ids=["query_revenue_metrics", "search_docs"],
@@ -267,7 +266,7 @@ class TestAgentDetail:
         assert draft_resp.status_code == 201
         draft = draft_resp.json()
         assert draft["forked_from_version_id"] == "null-only-agent_new_null"
-        assert draft["model"] == "claude-sonnet-5"
+        assert draft["model"] == "claude-3-5-sonnet-latest"
         assert draft["enabled_tool_ids"] == ["query_revenue_metrics", "search_docs"]
 
 
@@ -395,58 +394,12 @@ class TestAgentVersions:
     def test_get_version_detail(self, client: TestClient) -> None:
         response = client.get("/agents/revenue-ops-agent/versions/revenue-ops-agent_v1")
         assert response.status_code == 200
-        assert response.headers["cache-control"] == "private, no-store"
-        assert response.headers["pragma"] == "no-cache"
-        assert response.headers["vary"] == "X-Demo-Operator-Token"
         version = response.json()
         assert version["id"] == "revenue-ops-agent_v1"
         assert version["status"] == "published"
         assert "system_prompt" in version
         assert "enabled_tool_ids" in version
         assert "allowed_scopes" in version
-
-    def test_get_version_summary_redacts_sensitive_detail(self, client: TestClient) -> None:
-        response = client.get("/agents/revenue-ops-agent/versions/revenue-ops-agent_v1/summary")
-        assert response.status_code == 200
-        version = response.json()
-        assert version["id"] == "revenue-ops-agent_v1"
-        assert version["status"] == "published"
-        assert "system_prompt" not in version
-        assert "enabled_tool_ids" not in version
-        assert "allowed_scopes" not in version
-
-    def test_get_version_detail_requires_operator_token_in_demo_env(
-        self,
-        client: TestClient,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        monkeypatch.setenv("APP_ENV", "demo")
-        monkeypatch.setenv("DEMO_OPERATOR_TOKEN", "operator-secret")
-        get_settings.cache_clear()
-        try:
-            missing = client.get("/agents/revenue-ops-agent/versions/revenue-ops-agent_v1")
-            wrong = client.get(
-                "/agents/revenue-ops-agent/versions/revenue-ops-agent_v1",
-                headers={"X-Demo-Operator-Token": "wrong"},
-            )
-            correct = client.get(
-                "/agents/revenue-ops-agent/versions/revenue-ops-agent_v1",
-                headers={"X-Demo-Operator-Token": "operator-secret"},
-            )
-            summary = client.get(
-                "/agents/revenue-ops-agent/versions/revenue-ops-agent_v1/summary"
-            )
-        finally:
-            monkeypatch.delenv("APP_ENV", raising=False)
-            monkeypatch.delenv("DEMO_OPERATOR_TOKEN", raising=False)
-            get_settings.cache_clear()
-
-        assert missing.status_code == 403
-        assert wrong.status_code == 403
-        assert correct.status_code == 200
-        assert "system_prompt" in correct.json()
-        assert summary.status_code == 200
-        assert "system_prompt" not in summary.json()
 
     def test_get_nonexistent_version_returns_404(self, client: TestClient) -> None:
         response = client.get("/agents/revenue-ops-agent/versions/nonexistent")
@@ -654,10 +607,10 @@ class TestValidation:
         )
         response = client.post(
             "/agents/current-claude-agent/versions",
-            json={"model": "claude-sonnet-5"},
+            json={"model": "claude-3-5-sonnet-latest"},
         )
         assert response.status_code == 201
-        assert response.json()["model"] == "claude-sonnet-5"
+        assert response.json()["model"] == "claude-3-5-sonnet-latest"
 
     def test_publish_revalidates_persisted_model(
         self, client: TestClient, session_factory: Callable[[], Session]
@@ -678,27 +631,6 @@ class TestValidation:
             f"/agents/persisted-invalid-agent/versions/{draft_id}/publish"
         )
         assert response.status_code == 422
-
-    def test_publish_rejects_versions_without_evidence_tools(
-        self, client: TestClient
-    ) -> None:
-        client.post(
-            "/agents",
-            json={"id": "no-evidence-agent", "name": "No Evidence Agent"},
-        )
-        list_resp = client.get("/agents/no-evidence-agent/versions")
-        draft_id = list_resp.json()["versions"][0]["id"]
-        update_resp = client.patch(
-            f"/agents/no-evidence-agent/versions/{draft_id}",
-            json={"enabled_tool_ids": ["fetch_account_details"]},
-        )
-        assert update_resp.status_code == 200
-
-        response = client.post(
-            f"/agents/no-evidence-agent/versions/{draft_id}/publish"
-        )
-        assert response.status_code == 422
-        assert "evidence-producing tool" in response.json()["detail"]
 
     def test_publish_records_api_published_by(self, client: TestClient) -> None:
         client.post(

@@ -33,13 +33,6 @@ export default async function EvalReportPage({ searchParams }: EvalPageProps) {
         </div>
         <div className="header-actions">
           <form action={runEvalSuiteFromReport}>
-            <input
-              name="eval_run_token"
-              type="password"
-              className="field-input"
-              placeholder="Eval token"
-              autoComplete="off"
-            />
             <button className="action-button" type="submit">
               Run Suite
             </button>

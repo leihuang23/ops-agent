@@ -20,12 +20,10 @@ from app.agent.schemas import (
 )
 from app.agent.persistence import AgentRunRecorder, utcnow_naive
 from app.agents.service import DEFAULT_AGENT_ID, DEFAULT_AGENT_VERSION_ID
-from app.core.config import get_settings
 from app.db.base import Base
 from app.db.session import get_db
-from app.llm.schemas import LLMResponse, LLMUsage
 from app.main import app
-from app.models import AgentRun, AgentRunStep, AgentVersion, Incident
+from app.models import AgentRun, AgentRunStep, Incident
 from app.seed import reseed_database
 
 
@@ -650,78 +648,6 @@ def test_database_rejects_two_active_runs_for_same_incident_and_version(
             session.commit()
 
 
-def test_database_allows_active_runs_for_different_versions(
-    session_factory: Callable[[], Session],
-) -> None:
-    with session_factory() as session:
-        reseed_database(session)
-        incident_id = session.scalar(select(Incident.id))
-        assert incident_id is not None
-        now = utcnow_naive()
-        second_version = AgentVersion(
-            id="revenue-ops-agent_v2_test",
-            agent_id=DEFAULT_AGENT_ID,
-            version_number=2,
-            semantic_version="2.0.0",
-            status="published",
-            system_prompt="",
-            model="gpt-4o-mini",
-            temperature=0.1,
-            max_tokens=1024,
-            enabled_tool_ids=[
-                "query_revenue_metrics",
-                "fetch_account_details",
-                "search_docs",
-                "fetch_support_tickets",
-            ],
-            allowed_scopes=[],
-            published_at=now,
-            published_by="test",
-            forked_from_version_id=DEFAULT_AGENT_VERSION_ID,
-            created_at=now,
-            updated_at=now,
-        )
-        first_run = AgentRun(
-            id="run_active_one",
-            incident_id=incident_id,
-            agent_id=DEFAULT_AGENT_ID,
-            agent_version_id=DEFAULT_AGENT_VERSION_ID,
-            status="queued",
-            trace_id=None,
-            input_payload={"incident_id": incident_id},
-            final_report=None,
-            token_estimate=0,
-            cost_estimate_usd=0.0,
-            error=None,
-            started_at=None,
-            completed_at=None,
-            created_at=now,
-            updated_at=now,
-        )
-        second_run = AgentRun(
-            id="run_active_two",
-            incident_id=incident_id,
-            agent_id=DEFAULT_AGENT_ID,
-            agent_version_id=second_version.id,
-            status="running",
-            trace_id="local-test-trace",
-            input_payload={"incident_id": incident_id},
-            final_report=None,
-            token_estimate=0,
-            cost_estimate_usd=0.0,
-            error=None,
-            started_at=now,
-            completed_at=None,
-            created_at=now,
-            updated_at=now,
-        )
-        session.add(second_version)
-        session.add(first_run)
-        session.add(second_run)
-
-        session.commit()
-
-
 def test_investigation_fails_visibly_when_action_proposal_fails(
     session_factory: Callable[[], Session],
     monkeypatch: pytest.MonkeyPatch,
@@ -765,110 +691,6 @@ def test_investigation_fails_visibly_when_action_proposal_fails(
     )
     assert failed_step["status"] == "failed"
     assert "mock action proposal unavailable" in failed_step["error"]
-
-
-def test_investigation_fails_visibly_when_llm_model_provider_mismatches(
-    session_factory: Callable[[], Session],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("LLM_PROVIDER", "openai")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
-    get_settings.cache_clear()
-
-    with session_factory() as session:
-        reseed_database(session)
-        incident_id = session.scalar(select(Incident.id))
-
-    assert incident_id is not None
-
-    def override_get_db() -> Generator[Session, None, None]:
-        with session_factory() as db:
-            yield db
-
-    app.dependency_overrides[get_db] = override_get_db
-    client = TestClient(app)
-    try:
-        version_resp = client.post(
-            "/agents/revenue-ops-agent/versions",
-            json={"model": "claude-sonnet-5"},
-        )
-        assert version_resp.status_code == 201
-        version_id = version_resp.json()["id"]
-        publish_resp = client.post(
-            f"/agents/revenue-ops-agent/versions/{version_id}/publish"
-        )
-        assert publish_resp.status_code == 200
-        response = client.post(
-            "/agent/investigations",
-            json={
-                "incident_id": incident_id,
-                "run_inline": True,
-                "force": True,
-                "agent_version_id": version_id,
-            },
-        )
-    finally:
-        app.dependency_overrides.clear()
-        get_settings.cache_clear()
-
-    assert response.status_code == 201
-    payload = response.json()
-    assert payload["status"] == "failed"
-    assert payload["final_report"] is None
-    assert "LLM provider/model mismatch" in payload["error"]
-    assert "model=claude-sonnet-5" in payload["error"]
-    assert payload["trace_metadata"]["llm_provider"] == "openai"
-    assert payload["trace_metadata"]["llm_model"] == "claude-sonnet-5"
-    assert payload["trace_metadata"]["llm_used"] is False
-    assert "llm_configuration_error" in payload["trace_metadata"]["llm_fallback_reason"]
-
-
-def test_investigation_fails_visibly_when_enabled_llm_provider_errors(
-    session_factory: Callable[[], Session],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class ErrorLLMClient:
-        provider = "openai"
-        model = "gpt-4o-mini"
-
-        def complete(self, prompt: str) -> tuple[LLMResponse, LLMUsage]:
-            raise RuntimeError("provider unavailable")
-
-    with session_factory() as session:
-        reseed_database(session)
-        incident_id = session.scalar(select(Incident.id))
-
-    assert incident_id is not None
-
-    monkeypatch.setattr(
-        "app.agent.service.build_llm_client_for_version",
-        lambda _version_config: ErrorLLMClient(),
-    )
-
-    def override_get_db() -> Generator[Session, None, None]:
-        with session_factory() as db:
-            yield db
-
-    app.dependency_overrides[get_db] = override_get_db
-    client = TestClient(app)
-    try:
-        response = client.post(
-            "/agent/investigations",
-            json={"incident_id": incident_id, "run_inline": True, "force": True},
-        )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 201
-    payload = response.json()
-    assert payload["status"] == "failed"
-    assert payload["final_report"] is None
-    assert "provider unavailable" in payload["error"]
-    assert payload["trace_metadata"]["llm_provider"] == "openai"
-    assert payload["trace_metadata"]["llm_model"] == "gpt-4o-mini"
-    assert payload["trace_metadata"]["llm_used"] is False
-    assert "llm_runtime_error" in payload["trace_metadata"]["llm_fallback_reason"]
 
 
 def test_investigation_start_reuses_existing_successful_run_by_default(
@@ -1635,7 +1457,6 @@ def test_idempotency_key_does_not_reuse_different_agent_version(
     assert third_payload["id"] == first_payload["id"]
     assert first_payload["agent_version_id"] == DEFAULT_AGENT_VERSION_ID
     assert second_payload["agent_version_id"] == version_id
-    assert "system_prompt" not in second_payload["input_payload"]["agent_version"]
 
 
 def test_inline_force_respects_idempotency_key(
@@ -1679,46 +1500,6 @@ def test_inline_force_respects_idempotency_key(
     assert first.status_code == 201
     assert second.status_code == 200
     assert first.json()["id"] == second.json()["id"]
-
-
-def test_run_detail_redacts_legacy_system_prompt_from_input_payload(
-    session_factory: Callable[[], Session],
-) -> None:
-    with session_factory() as session:
-        reseed_database(session)
-        incident = session.scalar(select(Incident))
-        assert incident is not None
-        run = _make_test_run(incident.id)
-        run.input_payload = {
-            "incident_id": incident.id,
-            "agent_version": {
-                "id": DEFAULT_AGENT_VERSION_ID,
-                "model": "gpt-4o-mini",
-                "system_prompt": "legacy prompt should stay private",
-            },
-        }
-        session.add(run)
-        session.commit()
-        run_id = run.id
-
-    def override_get_db() -> Generator[Session, None, None]:
-        with session_factory() as db:
-            yield db
-
-    app.dependency_overrides[get_db] = override_get_db
-    client = TestClient(app)
-    try:
-        first = client.get(f"/agent/runs/{run_id}")
-        second = client.get(f"/agent/runs/{run_id}")
-    finally:
-        app.dependency_overrides.clear()
-
-    assert first.status_code == 200
-    assert second.status_code == 200
-    for response in (first, second):
-        agent_version_payload = response.json()["input_payload"]["agent_version"]
-        assert agent_version_payload["id"] == DEFAULT_AGENT_VERSION_ID
-        assert "system_prompt" not in agent_version_payload
 
 
 def _make_test_run(incident_id: str) -> AgentRun:

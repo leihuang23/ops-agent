@@ -337,13 +337,6 @@ function AnomalyRow({ anomaly }: { anomaly: RevenueAnomaly }) {
         ) : (
           <form action={openIncidentFromAnomaly}>
             <input name="anomaly_id" type="hidden" value={anomaly.id} />
-            <input
-              name="operator_token"
-              type="password"
-              className="field-input"
-              placeholder="Operator token"
-              autoComplete="off"
-            />
             <button className="action-button" type="submit">
               Open incident
             </button>

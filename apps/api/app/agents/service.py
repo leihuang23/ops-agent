@@ -15,7 +15,6 @@ from app.agents.schemas import (
     VersionDetail,
     VersionSummary,
 )
-from app.llm.models import ALLOWED_LLM_MODELS
 from app.models import Agent, AgentVersion
 
 
@@ -35,12 +34,12 @@ class InvalidVersionConfigError(ValueError):
     pass
 
 
-ALLOWED_MODELS: frozenset[str] = ALLOWED_LLM_MODELS
-EVIDENCE_PRODUCING_TOOL_IDS: frozenset[str] = frozenset(
+ALLOWED_MODELS: frozenset[str] = frozenset(
     {
-        "query_revenue_metrics",
-        "search_docs",
-        "fetch_support_tickets",
+        "gpt-4o-mini",
+        "gpt-4o",
+        "claude-3-5-sonnet-latest",
+        "claude-3-haiku-20240307",
     }
 )
 DEFAULT_ENABLED_TOOL_IDS: tuple[str, ...] = (
@@ -69,15 +68,6 @@ def _validate_version_config(
             raise InvalidVersionConfigError(
                 "Unknown tool ids: " + ", ".join(sorted(unknown))
             )
-
-
-def _validate_publishable_tools(enabled_tool_ids: list[str]) -> None:
-    if not set(enabled_tool_ids).intersection(EVIDENCE_PRODUCING_TOOL_IDS):
-        required = ", ".join(sorted(EVIDENCE_PRODUCING_TOOL_IDS))
-        raise InvalidVersionConfigError(
-            "Published versions must enable at least one evidence-producing tool: "
-            f"{required}"
-        )
 
 
 class DuplicateAgentError(ValueError):
@@ -245,15 +235,6 @@ def get_agent(session: Session, agent_id: str) -> dict[str, Any] | None:
         "version_count": count,
         "versions": [_version_summary(v) for v in ordered],
     }
-
-
-def get_version_summary(
-    session: Session, agent_id: str, version_id: str
-) -> VersionSummary | None:
-    version = session.get(AgentVersion, version_id)
-    if version is None or version.agent_id != agent_id:
-        return None
-    return _version_summary(version)
 
 
 def create_agent(session: Session, payload: AgentCreate) -> dict[str, Any]:
@@ -546,7 +527,6 @@ def publish_version(
         model=version.model,
         enabled_tool_ids=list(version.enabled_tool_ids or []),
     )
-    _validate_publishable_tools(list(version.enabled_tool_ids or []))
 
     now = _utcnow()
     next_number = (

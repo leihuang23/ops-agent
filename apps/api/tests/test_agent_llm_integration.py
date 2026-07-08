@@ -145,21 +145,6 @@ def test_workflow_falls_back_when_llm_returns_disabled_response(
         assert run.prompt_tokens > 0
 
 
-def test_diagnose_with_llm_reraises_enabled_provider_exception() -> None:
-    class ErrorLLMClient:
-        provider: str = "openai"
-        model: str = "gpt-4o-mini"
-
-        def complete(self, prompt: str) -> tuple[LLMResponse, LLMUsage]:
-            raise RuntimeError("provider unavailable")
-
-    with pytest.raises(RuntimeError, match="provider unavailable"):
-        _diagnose_with_llm(
-            llm_client=ErrorLLMClient(),  # type: ignore[arg-type]
-            prompt="test prompt",
-        )
-
-
 def test_diagnose_with_llm_returns_diagnosis_on_valid_response() -> None:
     client = FakeLLMClient(
         LLMResponse(

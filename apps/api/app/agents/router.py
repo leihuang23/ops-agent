@@ -12,7 +12,6 @@ from app.agents.schemas import (
     PublishResult,
     VersionDetail,
     VersionList,
-    VersionSummary,
 )
 from app.agents.service import (
     AgentNotFoundError,
@@ -24,7 +23,6 @@ from app.agents.service import (
     create_agent,
     create_version,
     get_agent,
-    get_version_summary,
     get_version,
     list_agents,
     list_versions,
@@ -200,37 +198,13 @@ def publish_version_endpoint(
     return PublishResult(version=version)
 
 
-@router.get(
-    "/{agent_id}/versions/{version_id}",
-    dependencies=[Depends(require_demo_operator_access)],
-)
-@limiter.limit(f"{_settings.rate_limit_mutations_per_minute}/minute")
+@router.get("/{agent_id}/versions/{version_id}")
 def version_detail(
-    request: Request,
     agent_id: str,
     version_id: str,
-    response: Response,
     db: Session = Depends(get_db),
 ) -> VersionDetail:
     version = get_version(db, agent_id, version_id)
-    if version is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Unknown version: {version_id}",
-        )
-    response.headers["Cache-Control"] = "private, no-store"
-    response.headers["Pragma"] = "no-cache"
-    response.headers["Vary"] = "X-Demo-Operator-Token"
-    return version
-
-
-@router.get("/{agent_id}/versions/{version_id}/summary")
-def version_summary(
-    agent_id: str,
-    version_id: str,
-    db: Session = Depends(get_db),
-) -> VersionSummary:
-    version = get_version_summary(db, agent_id, version_id)
     if version is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

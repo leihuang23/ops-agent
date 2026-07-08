@@ -1,6 +1,5 @@
 from app.llm.client import (
     AnthropicClient,
-    LLMConfigurationError,
     LLMClient,
     NoopLLMClient,
     OpenAIClient,
@@ -27,7 +26,6 @@ __all__ = [
     "get_pricing",
     "INVESTIGATION_SAFETY_RULES",
     "INVESTIGATION_SYSTEM_PROMPT",
-    "LLMConfigurationError",
     "LLMClient",
     "LLMResponse",
     "LLMUsage",

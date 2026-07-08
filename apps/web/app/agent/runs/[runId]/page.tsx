@@ -364,13 +364,6 @@ function ApprovalQueuePanel({
                       <form action={approveApprovalFromRun}>
                         <input name="approval_id" type="hidden" value={action.approval_request.id} />
                         <input name="run_id" type="hidden" value={runId} />
-                        <input
-                          name="operator_token"
-                          type="password"
-                          className="field-input"
-                          placeholder="Operator token"
-                          autoComplete="off"
-                        />
                         <button className="action-button" type="submit">
                           Approve
                         </button>
@@ -378,13 +371,6 @@ function ApprovalQueuePanel({
                       <form action={rejectApprovalFromRun}>
                         <input name="approval_id" type="hidden" value={action.approval_request.id} />
                         <input name="run_id" type="hidden" value={runId} />
-                        <input
-                          name="operator_token"
-                          type="password"
-                          className="field-input"
-                          placeholder="Operator token"
-                          autoComplete="off"
-                        />
                         <button className="action-button secondary-action" type="submit">
                           Reject
                         </button>

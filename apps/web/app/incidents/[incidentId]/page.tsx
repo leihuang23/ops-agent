@@ -160,13 +160,6 @@ export default async function IncidentPage({ params, searchParams }: IncidentPag
             ) : defaultVersion ? (
               <input name="agent_version_id" type="hidden" value={defaultVersion.version_id} />
             ) : null}
-            <input
-              name="operator_token"
-              type="password"
-              className="field-input"
-              placeholder="Operator token"
-              autoComplete="off"
-            />
             <button className="action-button" type="submit">
               Run investigation
             </button>

@@ -8,19 +8,14 @@ import pytest
 
 from app.llm import (
     AnthropicClient,
-    LLMConfigurationError,
     NoopLLMClient,
     OpenAIClient,
-    build_llm_client_for_version,
     INVESTIGATION_SAFETY_RULES,
     INVESTIGATION_SYSTEM_PROMPT,
     build_investigation_prompt,
     compose_system_prompt,
     parse_llm_response,
 )
-from app.core.config import get_settings
-from app.llm.models import ALLOWED_LLM_MODELS
-from app.llm.pricing import PRICING_TABLE
 from app.llm.schemas import LLMResponse
 
 
@@ -123,91 +118,6 @@ def test_anthropic_client_parses_response() -> None:
     assert usage.used_llm is True
 
 
-class _VersionConfig:
-    def __init__(self, model: str) -> None:
-        self.model = model
-        self.temperature = 0.1
-        self.max_tokens = 1024
-        self.system_prompt = None
-
-
-def test_build_llm_client_for_version_none_provider_records_selected_model(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("LLM_PROVIDER", "none")
-    get_settings.cache_clear()
-    try:
-        client = build_llm_client_for_version(_VersionConfig("claude-sonnet-5"))
-    finally:
-        get_settings.cache_clear()
-
-    assert isinstance(client, NoopLLMClient)
-    assert client.provider == "none"
-    assert client.model == "claude-sonnet-5"
-
-
-def test_build_llm_client_for_version_rejects_provider_model_mismatch(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("LLM_PROVIDER", "openai")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
-    get_settings.cache_clear()
-    try:
-        with pytest.raises(LLMConfigurationError, match="provider/model mismatch"):
-            build_llm_client_for_version(_VersionConfig("claude-sonnet-5"))
-    finally:
-        get_settings.cache_clear()
-
-
-def test_build_llm_client_for_version_rejects_missing_enabled_provider_key(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    get_settings.cache_clear()
-    try:
-        with pytest.raises(LLMConfigurationError, match="ANTHROPIC_API_KEY is unset"):
-            build_llm_client_for_version(_VersionConfig("claude-haiku-4-5"))
-    finally:
-        get_settings.cache_clear()
-
-
-def test_build_llm_client_for_version_uses_matching_configured_provider(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
-    get_settings.cache_clear()
-    try:
-        client = build_llm_client_for_version(
-            _VersionConfig("claude-sonnet-5")
-        )
-    finally:
-        get_settings.cache_clear()
-
-    assert isinstance(client, AnthropicClient)
-    assert client.model == "claude-sonnet-5"
-
-
-def test_build_llm_client_allows_current_anthropic_haiku_model(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
-    get_settings.cache_clear()
-    try:
-        client = build_llm_client_for_version(
-            _VersionConfig("claude-haiku-4-5")
-        )
-    finally:
-        get_settings.cache_clear()
-
-    assert isinstance(client, AnthropicClient)
-    assert client.model == "claude-haiku-4-5"
-
-
 def test_build_investigation_prompt_includes_evidence() -> None:
     prompt = build_investigation_prompt(
         incident={"title": "MRR drop", "summary": "Paid MRR dropped"},
@@ -240,10 +150,6 @@ def test_pricing_table_lookup() -> None:
     pricing = get_pricing("gpt-4o-mini")
     assert pricing.input_price_per_1m_tokens > 0
     assert pricing.output_price_per_1m_tokens > 0
-
-
-def test_every_allowed_model_has_explicit_pricing() -> None:
-    assert ALLOWED_LLM_MODELS <= set(PRICING_TABLE)
 
 
 def test_estimate_cost_usd() -> None:
