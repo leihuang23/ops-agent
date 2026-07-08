@@ -12,7 +12,6 @@ from app.agents.schemas import (
     PublishResult,
     VersionDetail,
     VersionList,
-    VersionSummary,
 )
 from app.agents.service import (
     AgentNotFoundError,
