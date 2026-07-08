@@ -25,8 +25,15 @@ export default async function AgentVersionPage({
   ]);
 
   if (!agentResult.ok || !versionResult.ok) {
-    const errorMessage = !agentResult.ok ? agentResult.error : !versionResult.ok ? versionResult.error : 'Failed to load version';
-    if (errorMessage.includes('HTTP 404')) {
+    const errorMessage = !agentResult.ok
+      ? agentResult.error
+      : !versionResult.ok
+        ? versionResult.error
+        : 'Failed to load version';
+    if (
+      errorMessage === 'Agent endpoint returned HTTP 404' ||
+      errorMessage === 'Version endpoint returned HTTP 404'
+    ) {
       notFound();
     }
     return (
