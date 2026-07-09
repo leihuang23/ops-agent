@@ -9,14 +9,16 @@ test.describe('control-plane run', () => {
     await expect(page.getByRole('heading', { name: 'Agents', exact: true })).toBeVisible();
 
     // Enter the first (default) agent's detail page.
-    const agentLink = page
-      .getByRole('link')
-      .filter({ hasText: /Revenue Ops Agent|Ops Agent/ })
-      .first();
+    // Use the full agent name as the accessible-name filter so the nav brand
+    // link ("Ops Agent" -> /) is not matched — a bare /Ops Agent/ alternative
+    // would resolve to the brand link first and navigate to the dashboard.
+    const agentLink = page.getByRole('link', { name: 'Revenue Ops Agent' }).first();
     await agentLink.click();
 
     // Enter the latest published version (v1) from the agent's version list.
-    const versionLink = page.getByRole('link', { name: /v1/ }).first();
+    // The version row renders "v1" as text and an "Inspect" link into the
+    // version detail page (where the Launch form lives).
+    const versionLink = page.getByRole('link', { name: 'Inspect' }).first();
     await versionLink.click();
 
     // The version detail page exposes the Launch form on published versions.
