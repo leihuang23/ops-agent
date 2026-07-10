@@ -30,12 +30,20 @@ from app.cache import Cache
 from app.db.session import SessionLocal
 from app.llm import build_llm_client_for_version
 from app.logging_config import get_logger
-from app.models import AgentRun, AgentRunStep, AgentVersion, Incident, ModelUsage
+from app.models import (
+    AgentRun,
+    AgentRunStep,
+    AgentVersion,
+    ApprovalRequest,
+    Incident,
+    ModelUsage,
+)
 from app.tools.policy import can_call_tool
 from app.tools.scopes import TOOL_SCOPES
 
 ACTIVE_RUN_STALE_AFTER = timedelta(minutes=10)
 ACTIVE_RUN_STATUSES = ("queued", "running")
+BLOCKING_RUN_STATUSES = (*ACTIVE_RUN_STATUSES, "waiting_for_approval")
 
 logger = get_logger(__name__)
 
@@ -488,7 +496,7 @@ def execute_investigation_run_with_session(
             log_message="Investigation run failed",
         )
 
-    completed_at = utcnow_naive()
+    report_ready_at = utcnow_naive()
     finished_run = session.get(AgentRun, run.id)
     if finished_run is None:
         raise RuntimeError(f"Agent run disappeared: {run.id}")
@@ -508,21 +516,17 @@ def execute_investigation_run_with_session(
         )
         _invalidate_run_detail_cache(finished_run.id)
         return get_run_detail(session, finished_run.id)
-    # Conditional UPDATE so a concurrent transition between the refresh and
-    # the commit does not overwrite the operator's action (mirrors
-    # mark_run_failed_on_timeout and transition_run). Committing the success
-    # state here -- before action proposal -- also prevents the recorder's
-    # periodic commits inside _propose_report_actions from flushing a stale
-    # "succeeded" over a concurrent force-fail.
+    # Persist the report before action proposal, but deliberately keep the run
+    # in ``running``. A control-plane run may need to enter the Phase 5 approval
+    # checkpoint after its high-risk mock actions are created; marking it
+    # succeeded here would make that terminal state impossible to leave.
     claim = session.execute(
         update(AgentRun)
         .where(AgentRun.id == run.id, AgentRun.status == "running")
         .values(
-            status="succeeded",
             error=None,
             final_report=report.model_dump(mode="json"),
-            completed_at=completed_at,
-            updated_at=completed_at,
+            updated_at=report_ready_at,
         )
     )
     if claim.rowcount != 1:
@@ -537,9 +541,9 @@ def execute_investigation_run_with_session(
         )
         return current
     session.commit()
-    # Invalidate immediately so a GET between this success commit and the
-    # action-proposal block does not surface a stale "running" detail for up
-    # to RUN_DETAIL_CACHE_TTL_SECONDS.
+    # Invalidate immediately so a GET between report persistence and action
+    # proposal can at least surface the completed report while the run remains
+    # non-terminal.
     _invalidate_run_detail_cache(run.id)
     session.refresh(finished_run)
 
@@ -552,14 +556,9 @@ def execute_investigation_run_with_session(
             raise
         error_msg = f"Action proposal failed: {exc}"
         completed_at = utcnow_naive()
-        # Conditional UPDATE for consistency with all other terminal writes.
-        # ``succeeded`` is terminal so no operator transition can race here,
-        # but the conditional pattern keeps the invariant uniform.
         claim = session.execute(
             update(AgentRun)
-            .where(
-                AgentRun.id == finished_run.id, AgentRun.status == "succeeded"
-            )
+            .where(AgentRun.id == finished_run.id, AgentRun.status == "running")
             .values(
                 status="failed",
                 error=error_msg,
@@ -586,19 +585,73 @@ def execute_investigation_run_with_session(
         )
         return get_run_detail(session, finished_run.id)
 
-    # The success state was already committed above; the recorder may have
-    # added step rows during action proposal, so commit those and refresh the
-    # cache. Redundant status/completed_at re-assignment dropped — already
-    # persisted by the conditional UPDATE above.
-    _finish_trace(trace, outputs=finished_run.final_report)
+    # Serialize the approval checkpoint with approval decisions. Without this
+    # row lock, the last decision can observe ``running`` just before this code
+    # writes ``waiting_for_approval``, stranding a run with zero pending items.
+    locked_run = session.scalar(
+        select(AgentRun)
+        .where(AgentRun.id == finished_run.id)
+        .with_for_update()
+    )
+    if locked_run is None:
+        raise LookupError(f"Unknown agent run id: {finished_run.id}")
+    pending_approval_count = int(
+        session.scalar(
+            select(func.count(ApprovalRequest.id)).where(
+                ApprovalRequest.run_id == finished_run.id,
+                ApprovalRequest.status == "pending",
+            )
+        )
+        or 0
+    )
+    is_control_plane_run = (
+        isinstance(locked_run.input_payload, dict)
+        and locked_run.input_payload.get("run_surface") == "control_plane"
+    )
+    final_status = (
+        "waiting_for_approval"
+        if is_control_plane_run and pending_approval_count > 0
+        else "succeeded"
+    )
+    finalized_at = utcnow_naive()
+    final_values: dict[str, Any] = {
+        "status": final_status,
+        "updated_at": finalized_at,
+    }
+    if final_status == "succeeded":
+        final_values["completed_at"] = finalized_at
+    else:
+        final_values["completed_at"] = None
+    final_claim = session.execute(
+        update(AgentRun)
+        .where(AgentRun.id == locked_run.id, AgentRun.status == "running")
+        .values(**final_values)
+    )
+    if final_claim.rowcount != 1:
+        session.rollback()
+        _invalidate_run_detail_cache(finished_run.id)
+        current = get_run_detail(session, finished_run.id)
+        _finish_trace(
+            trace,
+            outputs=current.final_report,
+            error=current.error,
+        )
+        return current
+
     session.commit()
     _invalidate_run_detail_cache(finished_run.id)
+    session.refresh(finished_run)
+    _finish_trace(trace, outputs=finished_run.final_report)
     logger.info(
-        "Investigation run succeeded",
+        "Investigation run reached approval checkpoint"
+        if final_status == "waiting_for_approval"
+        else "Investigation run succeeded",
         extra={
             "run_id": finished_run.id,
             "incident_id": finished_run.incident_id,
             "trace_id": finished_run.trace_id,
+            "status": final_status,
+            "pending_approval_count": pending_approval_count,
         },
     )
 
@@ -974,7 +1027,11 @@ def _run_last_activity_at(session: Session, run: AgentRun) -> datetime:
 def _latest_reusable_run_id(
     session: Session, incident_id: str, *, active_only: bool = False, agent_version_id: str | None = None
 ) -> str | None:
-    statuses = ACTIVE_RUN_STATUSES if active_only else (*ACTIVE_RUN_STATUSES, "succeeded")
+    statuses = (
+        BLOCKING_RUN_STATUSES
+        if active_only
+        else (*BLOCKING_RUN_STATUSES, "succeeded")
+    )
     stmt = (
         select(AgentRun.id)
         .where(

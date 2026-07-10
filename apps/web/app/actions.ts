@@ -9,6 +9,7 @@ import {
   launchRun,
   publishAgentVersion as apiPublishAgentVersion,
   rejectApprovalRequest,
+  runEvalDataset,
   runEvalSuite,
   startInvestigation,
   updateAgentVersion,
@@ -82,7 +83,7 @@ export async function approveApprovalFromQueue(formData: FormData) {
     demoOperatorOptions(),
   );
 
-  redirectToApprovals(result.ok ? undefined : result.error);
+  redirectToApprovals(formData, result.ok ? undefined : result.error);
 }
 
 export async function rejectApprovalFromQueue(formData: FormData) {
@@ -93,7 +94,33 @@ export async function rejectApprovalFromQueue(formData: FormData) {
     demoOperatorOptions(),
   );
 
-  redirectToApprovals(result.ok ? undefined : result.error);
+  redirectToApprovals(formData, result.ok ? undefined : result.error);
+}
+
+export async function runEvalDatasetFromStudio(formData: FormData) {
+  const datasetId = readRequiredFormValue(formData, 'dataset_id');
+  const agentVersionId = readRequiredFormValue(formData, 'agent_version_id');
+  const params = new URLSearchParams({
+    dataset_id: datasetId,
+    results_version_id: agentVersionId,
+  });
+  copySafeQueryValue(formData, params, 'version_a');
+  copySafeQueryValue(formData, params, 'version_b');
+
+  const result = await runEvalDataset(datasetId, agentVersionId, {
+    ...demoOperatorOptions(),
+    evalRunToken: process.env.EVAL_RUN_TOKEN,
+  });
+
+  if (!result.ok) {
+    params.set('eval_error', result.error);
+  } else {
+    params.set(
+      'eval_notice',
+      `Eval run ${result.data.eval_run_id} queued for the selected agent version.`,
+    );
+  }
+  redirect(`/evals?${params.toString()}`);
 }
 
 export async function runEvalSuiteFromReport() {
@@ -253,9 +280,21 @@ function readRunSurface(formData: FormData): 'agent' | 'control-plane' {
   return formData.get('surface') === 'control-plane' ? 'control-plane' : 'agent';
 }
 
-function redirectToApprovals(error?: string) {
+function redirectToApprovals(formData: FormData, error?: string) {
+  const params = new URLSearchParams();
+  copySafeQueryValue(formData, params, 'status');
+  copySafeQueryValue(formData, params, 'agent_version_id');
+  copySafeQueryValue(formData, params, 'risk_level');
   if (error) {
-    redirect(`/approvals?approval_error=${encodeURIComponent(error)}`);
+    params.set('approval_error', error);
   }
-  redirect('/approvals');
+  const query = params.toString();
+  redirect(`/approvals${query ? `?${query}` : ''}`);
+}
+
+function copySafeQueryValue(formData: FormData, params: URLSearchParams, key: string) {
+  const value = formData.get(key);
+  if (typeof value === 'string' && value.length > 0) {
+    params.set(key, value);
+  }
 }

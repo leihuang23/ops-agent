@@ -9,6 +9,7 @@ from app.approvals.schemas import (
     ApprovalStatus,
     MockActionCreate,
     MockActionRead,
+    RiskLevel,
 )
 from app.approvals.service import (
     approve_request,
@@ -63,9 +64,16 @@ def propose_mock_action(
 @approvals_router.get("")
 def approval_queue(
     status: ApprovalStatus | None = None,
+    agent_version_id: str | None = None,
+    risk_level: RiskLevel | None = None,
     db: Session = Depends(get_db),
 ) -> list[ApprovalRequestRead]:
-    return list_approval_requests(db, status=status)
+    return list_approval_requests(
+        db,
+        status=status,
+        agent_version_id=agent_version_id,
+        risk_level=risk_level,
+    )
 
 
 @approvals_router.post(

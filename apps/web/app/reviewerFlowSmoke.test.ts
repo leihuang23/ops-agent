@@ -60,14 +60,37 @@ test('server actions forward demo operator credentials without public env exposu
   assert.doesNotMatch(actionSource, /NEXT_PUBLIC_DEMO_OPERATOR_TOKEN/);
 });
 
-test('eval report page exposes scenario scores, failures, and traces', () => {
+test('eval studio exposes datasets, per-version runs, results, and regression comparison', () => {
   const source = readWorkspaceFile('app/evals/page.tsx');
 
-  assert.match(source, /Run Suite/);
-  assert.match(source, /Scenario results/);
-  assert.match(source, /Expected/);
-  assert.match(source, /Actual/);
-  assert.match(source, /Observed evidence/);
-  assert.match(source, /failure_reasons/);
-  assert.match(source, /Trace/);
+  assert.match(source, /Eval Studio/);
+  assert.match(source, /Datasets/);
+  assert.match(source, /Run selected dataset/);
+  assert.match(source, /Compare A vs B/);
+  assert.match(source, /Per-case results/);
+  assert.match(source, /regressions detected/);
+  assert.match(source, /eval-regression-row/);
+});
+
+test('eval api client uses the Phase 5 dataset, result, and comparison contracts', () => {
+  const source = readWorkspaceFile('lib/api.ts');
+
+  assert.match(source, /\/eval-datasets/);
+  assert.match(source, /agent_version_id: agentVersionId/);
+  assert.match(source, /\/eval-results/);
+  assert.match(source, /\/eval-results\/compare/);
+  assert.match(source, /dataset_id/);
+  assert.match(source, /version_a/);
+  assert.match(source, /version_b/);
+});
+
+test('approval queue filters by version and risk and preserves filters through decisions', () => {
+  const pageSource = readWorkspaceFile('app/approvals/page.tsx');
+  const actionSource = readWorkspaceFile('app/actions.ts');
+
+  assert.match(pageSource, /name="agent_version_id"/);
+  assert.match(pageSource, /name="risk_level"/);
+  assert.match(pageSource, /ApprovalDecisionFields/);
+  assert.match(actionSource, /copySafeQueryValue\(formData, params, 'agent_version_id'\)/);
+  assert.match(actionSource, /copySafeQueryValue\(formData, params, 'risk_level'\)/);
 });

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from sqlalchemy import select, update
-from sqlalchemy.orm import Session
+from sqlalchemy import func, select, update
+from sqlalchemy.orm import Session, contains_eager, selectinload
 
 from app.agent.persistence import utcnow_naive
 from app.agent.schemas import InvestigationReport
@@ -19,6 +19,7 @@ from app.approvals.schemas import (
 )
 from app.cache import Cache
 from app.models import ActionAuditEvent, AgentRun, ApprovalRequest, MockAction
+from app.runs.lifecycle import validate_transition
 
 HIGH_RISK_ACTION_TYPES = {"draft_customer_email", "update_account_note"}
 REPORT_ACTION_TYPES = (
@@ -233,11 +234,32 @@ def get_mock_action(session: Session, action_id: str) -> MockActionRead:
 
 
 def list_approval_requests(
-    session: Session, *, status: ApprovalStatus | None = None
+    session: Session,
+    *,
+    status: ApprovalStatus | None = None,
+    agent_version_id: str | None = None,
+    risk_level: RiskLevel | None = None,
 ) -> list[ApprovalRequestRead]:
-    query = select(ApprovalRequest).order_by(ApprovalRequest.created_at, ApprovalRequest.id)
+    query = (
+        select(ApprovalRequest)
+        .join(AgentRun, AgentRun.id == ApprovalRequest.run_id)
+        .options(
+            contains_eager(ApprovalRequest.run),
+            selectinload(ApprovalRequest.action).selectinload(
+                MockAction.approval_request
+            ),
+            selectinload(ApprovalRequest.action).selectinload(
+                MockAction.audit_events
+            ),
+        )
+    )
     if status is not None:
         query = query.where(ApprovalRequest.status == status)
+    if agent_version_id is not None:
+        query = query.where(AgentRun.agent_version_id == agent_version_id)
+    if risk_level is not None:
+        query = query.where(ApprovalRequest.risk_level == risk_level)
+    query = query.order_by(ApprovalRequest.created_at, ApprovalRequest.id)
     approvals = session.scalars(query).all()
     return [approval_request_to_read(approval) for approval in approvals]
 
@@ -248,6 +270,8 @@ def approve_request(
     approval = session.get(ApprovalRequest, approval_id)
     if approval is None:
         raise LookupError(f"Unknown approval request id: {approval_id}")
+
+    _lock_approval_run(session, approval.run_id)
 
     now = utcnow_naive()
     claim = session.execute(
@@ -298,6 +322,7 @@ def approve_request(
         metadata={"risk_level": action.risk_level, "action_type": action.action_type},
         created_at=now,
     )
+    _complete_waiting_run_if_decided(session, approval.run_id, now=now)
     session.commit()
     _invalidate_run_detail_cache(approval.run_id)
     return get_approval_request(session, approval_id)
@@ -309,6 +334,8 @@ def reject_request(
     approval = session.get(ApprovalRequest, approval_id)
     if approval is None:
         raise LookupError(f"Unknown approval request id: {approval_id}")
+
+    _lock_approval_run(session, approval.run_id)
 
     now = utcnow_naive()
     claim = session.execute(
@@ -347,6 +374,7 @@ def reject_request(
         metadata={"risk_level": action.risk_level, "action_type": action.action_type},
         created_at=now,
     )
+    _complete_waiting_run_if_decided(session, approval.run_id, now=now)
     session.commit()
     _invalidate_run_detail_cache(approval.run_id)
     return get_approval_request(session, approval_id)
@@ -354,6 +382,58 @@ def reject_request(
 
 def _invalidate_run_detail_cache(run_id: str) -> None:
     Cache().delete(f"agent:run:{run_id}")
+
+
+def _lock_approval_run(session: Session, run_id: str) -> AgentRun:
+    """Serialize decisions for a run so the last one reliably resumes it.
+
+    Approvals are separate rows, so two operators can decide different pending
+    actions concurrently. Locking their shared run prevents both transactions
+    from observing the other approval as still pending and leaving the run
+    stranded in ``waiting_for_approval``.
+    """
+    run = session.scalar(
+        select(AgentRun).where(AgentRun.id == run_id).with_for_update()
+    )
+    if run is None:
+        raise LookupError(f"Unknown agent run id: {run_id}")
+    return run
+
+
+def _complete_waiting_run_if_decided(
+    session: Session, run_id: str, *, now
+) -> None:
+    pending_count = int(
+        session.scalar(
+            select(func.count(ApprovalRequest.id)).where(
+                ApprovalRequest.run_id == run_id,
+                ApprovalRequest.status == "pending",
+            )
+        )
+        or 0
+    )
+    if pending_count:
+        return
+
+    validate_transition("waiting_for_approval", "running")
+    resumed = session.execute(
+        update(AgentRun)
+        .where(
+            AgentRun.id == run_id,
+            AgentRun.status == "waiting_for_approval",
+        )
+        .values(status="running", updated_at=now)
+    )
+    if resumed.rowcount != 1:
+        return
+    validate_transition("running", "succeeded")
+    completed = session.execute(
+        update(AgentRun)
+        .where(AgentRun.id == run_id, AgentRun.status == "running")
+        .values(status="succeeded", completed_at=now, updated_at=now)
+    )
+    if completed.rowcount != 1:
+        raise RuntimeError(f"Run {run_id} could not complete after approval resume")
 
 
 def get_approval_request(session: Session, approval_id: str) -> ApprovalRequestRead:
@@ -438,6 +518,7 @@ def approval_summary(approval: ApprovalRequest) -> ApprovalRequestSummary:
     return ApprovalRequestSummary(
         id=approval.id,
         run_id=approval.run_id,
+        agent_version_id=approval.run.agent_version_id,
         action_id=approval.action_id,
         status=approval.status,
         risk_level=approval.risk_level,

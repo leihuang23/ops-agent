@@ -146,6 +146,21 @@ def test_high_risk_action_is_blocked_until_approved(
     assert queue_response.status_code == 200
     queue_payload = queue_response.json()
     assert [item["id"] for item in queue_payload] == [payload["approval_request"]["id"]]
+    assert queue_payload[0]["agent_version_id"] == DEFAULT_AGENT_VERSION_ID
+
+    version_filtered = test_client.get(
+        f"/approvals?status=pending&agent_version_id={DEFAULT_AGENT_VERSION_ID}"
+        "&risk_level=high"
+    )
+    assert version_filtered.status_code == 200
+    assert [item["id"] for item in version_filtered.json()] == [
+        payload["approval_request"]["id"]
+    ]
+
+    assert test_client.get(
+        "/approvals?status=pending&agent_version_id=missing-version"
+    ).json() == []
+    assert test_client.get("/approvals?status=pending&risk_level=low").json() == []
 
 
 def test_mock_action_payload_rejects_unsupported_fields(

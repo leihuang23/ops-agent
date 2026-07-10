@@ -15,6 +15,7 @@ from app.core.errors import error_response
 from app.core.limiter import limiter
 from app.dashboard.router import router as dashboard_router
 from app.evals.router import router as evals_router
+from app.evals.studio_router import router as eval_studio_router
 from app.health.router import router as health_router
 from app.incidents.router import router as incidents_router
 from app.knowledge.router import router as knowledge_router
@@ -111,6 +112,7 @@ def create_app() -> FastAPI:
     app.include_router(mock_actions_router)
     app.include_router(approvals_router)
     app.include_router(evals_router)
+    app.include_router(eval_studio_router)
     app.include_router(runs_router)
     return app
 

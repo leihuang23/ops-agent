@@ -31,6 +31,8 @@ from app.models import (
     AgentVersion,
     ApprovalRequest,
     EvalCase,
+    EvalDataset,
+    EvalDatasetCase,
     EvalResult,
     Incident,
     Invoice,
@@ -153,6 +155,8 @@ SCENARIO_ACCOUNT_NUMBERS: Final[dict[str, set[int]]] = {
 
 MODEL_ORDER: Final[tuple[type, ...]] = (
     EvalResult,
+    EvalDatasetCase,
+    EvalDataset,
     EvalCase,
     ActionAuditEvent,
     ApprovalRequest,
@@ -191,6 +195,7 @@ def ensure_seeded_if_empty(session: Session) -> SeedResult | None:
     if existing_account is not None:
         ingest_builtin_knowledge_documents(session, force=False)
         _seed_control_plane_agent(session)
+        _seed_eval_studio_assets(session)
         session.commit()
         return None
 
@@ -235,6 +240,7 @@ def insert_seed_data(session: Session) -> SeedResult:
     session.flush()
     ingest_builtin_knowledge_documents(session, commit=False)
     _seed_control_plane_agent(session)
+    _seed_eval_studio_assets(session)
     session.flush()
 
     counts = seed_counts(session)
@@ -792,6 +798,69 @@ def _seed_control_plane_agent(session: Session) -> None:
     _backfill_agent_run_versions(session, agent_id, version_id)
 
 
+def _seed_eval_studio_assets(session: Session) -> None:
+    """Idempotently seed the default dataset and a reproducibly degraded version."""
+    from app.agent.tools import TOOL_IDS
+    from app.tools.scopes import DEFAULT_V1_ALLOWED_SCOPES
+
+    now = datetime.now(UTC).replace(tzinfo=None)
+    dataset = session.get(EvalDataset, "mrr-drop-suite")
+    if dataset is None:
+        dataset = EvalDataset(
+            id="mrr-drop-suite",
+            name="mrr-drop-suite",
+            description=(
+                "Deterministic revenue-operations regression suite covering every "
+                "seeded incident scenario."
+            ),
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(dataset)
+        session.flush()
+
+    linked_case_ids = {
+        link.eval_case_id
+        for link in session.scalars(
+            select(EvalDatasetCase).where(
+                EvalDatasetCase.dataset_id == dataset.id
+            )
+        )
+    }
+    eval_case_ids = session.scalars(select(EvalCase.id).order_by(EvalCase.id)).all()
+    session.add_all(
+        EvalDatasetCase(dataset_id=dataset.id, eval_case_id=case_id)
+        for case_id in eval_case_ids
+        if case_id not in linked_case_ids
+    )
+
+    degraded_id = "revenue-ops-agent_degraded"
+    if session.get(AgentVersion, degraded_id) is None:
+        enabled_tool_ids = [tool_id for tool_id in TOOL_IDS if tool_id != "search_docs"]
+        session.add(
+            AgentVersion(
+                id=degraded_id,
+                agent_id="revenue-ops-agent",
+                # Keep v1 as the default published version while still exposing
+                # this published variant as an explicit comparison target.
+                version_number=0,
+                semantic_version="0.9.0-degraded",
+                status="published",
+                system_prompt="",
+                model="gpt-4o-mini",
+                temperature=0.1,
+                max_tokens=1024,
+                enabled_tool_ids=enabled_tool_ids,
+                allowed_scopes=list(DEFAULT_V1_ALLOWED_SCOPES),
+                published_at=now,
+                published_by="bootstrap",
+                forked_from_version_id="revenue-ops-agent_v1",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+
 def _backfill_agent_run_versions(
     session: Session, agent_id: str, agent_version_id: str
 ) -> None:
@@ -1063,6 +1132,8 @@ def seed_counts(session: Session) -> dict[str, int]:
         "support_tickets": SupportTicket,
         "incidents": Incident,
         "eval_cases": EvalCase,
+        "eval_datasets": EvalDataset,
+        "eval_dataset_cases": EvalDatasetCase,
         "eval_results": EvalResult,
         "agent_runs": AgentRun,
         "agent_run_steps": AgentRunStep,

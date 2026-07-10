@@ -45,6 +45,7 @@ class ActionAuditEventRead(BaseModel):
 class ApprovalRequestSummary(BaseModel):
     id: str
     run_id: str
+    agent_version_id: str
     action_id: str
     status: ApprovalStatus
     risk_level: RiskLevel
