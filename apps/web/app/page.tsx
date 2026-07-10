@@ -47,10 +47,13 @@ export default async function Home({ searchParams }: HomeProps) {
     <main className="dashboard-shell">
       <header className="dashboard-header">
         <div>
-          <p className="eyebrow">Ops Agent</p>
-          <h1>SaaS revenue and support dashboard</h1>
+          <p className="eyebrow">Evidence-backed agent operations</p>
+          <h1>Revenue intelligence and agent control plane</h1>
         </div>
         <div className="header-actions">
+          <Link className="action-button secondary-action" href="/agents">
+            Agents
+          </Link>
           <Link className="action-button secondary-action" href="/evals">
             Evals
           </Link>

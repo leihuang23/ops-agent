@@ -2,24 +2,16 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import { launchControlPlaneRun, publishAgentVersion, saveAgentVersionDraft } from '@/app/actions';
-import { getAgent, getAgentVersion, listAgentVersions, listIncidents } from '@/lib/api';
+import {
+  getAgent,
+  getAgentVersion,
+  listAgentVersions,
+  listIncidents,
+  listTools,
+} from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
 
 export const dynamic = 'force-dynamic';
-
-const ALL_TOOL_IDS = [
-  'query_revenue_metrics',
-  'fetch_account_details',
-  'search_docs',
-  'fetch_support_tickets',
-];
-
-const TOOL_LABELS: Record<string, string> = {
-  query_revenue_metrics: 'Query revenue metrics',
-  fetch_account_details: 'Fetch account details',
-  search_docs: 'Search knowledge docs',
-  fetch_support_tickets: 'Fetch support tickets',
-};
 
 const COMMON_MODELS = [
   'gpt-4o-mini',
@@ -62,11 +54,12 @@ export default async function AgentVersionPage({
       ? resolvedSearchParams.launch_error
       : null;
 
-  const [agentResult, versionResult, versionsResult, incidentsResult] = await Promise.all([
+  const [agentResult, versionResult, versionsResult, incidentsResult, toolsResult] = await Promise.all([
     getAgent(agentId),
     getAgentVersion(agentId, versionId),
     listAgentVersions(agentId, { limit: 50 }),
     listIncidents({ limit: 25 }),
+    listTools(),
   ]);
 
   if (!agentResult.ok || !versionResult.ok) {
@@ -97,6 +90,16 @@ export default async function AgentVersionPage({
   const versions = versionsResult.ok ? versionsResult.data.versions : [];
   const drafts = versions.filter((v) => v.status === 'draft');
   const incidents = incidentsResult.ok ? incidentsResult.data.incidents : [];
+  const tools = toolsResult.ok ? toolsResult.data.tools : [];
+  const toolIds = tools.length > 0 ? tools.map((tool) => tool.id) : version.enabled_tool_ids;
+  const toolLabels = Object.fromEntries(tools.map((tool) => [tool.id, tool.name]));
+  const permissionScopes = Array.from(
+    new Set(
+      tools.length > 0
+        ? tools.map((tool) => tool.permission_scope)
+        : version.allowed_scopes,
+    ),
+  );
 
   return (
     <main className="dashboard-shell">
@@ -303,7 +306,7 @@ export default async function AgentVersionPage({
             </div>
             <input type="hidden" name="enabled_tool_ids_present" value="1" />
             <div className="form-stack">
-              {ALL_TOOL_IDS.map((toolId) => (
+              {toolIds.map((toolId) => (
                 <label key={toolId} className="checkbox-row">
                   <input
                     type="checkbox"
@@ -312,7 +315,7 @@ export default async function AgentVersionPage({
                     defaultChecked={version.enabled_tool_ids.includes(toolId)}
                   />
                   <span>
-                    <strong>{TOOL_LABELS[toolId] ?? toolId}</strong>
+                    <strong>{toolLabels[toolId] ?? toolId}</strong>
                     <code style={{ marginLeft: '8px', color: 'var(--muted)' }}>{toolId}</code>
                   </span>
                 </label>
@@ -322,6 +325,27 @@ export default async function AgentVersionPage({
               Note: unchecked tools will return empty/neutral evidence during investigation.
               The incident and root-cause diagnosis tool is always available.
             </p>
+          </section>
+
+          <section className="panel report-panel-wide">
+            <div className="panel-header">
+              <h2>Allowed scopes</h2>
+              <span>A tool also needs its fixed scope before runtime dispatch</span>
+            </div>
+            <input type="hidden" name="allowed_scopes_present" value="1" />
+            <div className="form-stack">
+              {permissionScopes.map((scope) => (
+                <label key={scope} className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    name="allowed_scopes"
+                    value={scope}
+                    defaultChecked={version.allowed_scopes.includes(scope)}
+                  />
+                  <code>{scope}</code>
+                </label>
+              ))}
+            </div>
           </section>
 
           <section className="panel report-panel-wide">
@@ -429,7 +453,7 @@ export default async function AgentVersionPage({
                     <ul style={{ margin: 0, paddingLeft: '20px' }}>
                       {version.enabled_tool_ids.map((toolId) => (
                         <li key={toolId}>
-                          {TOOL_LABELS[toolId] ?? toolId}{' '}
+                          {toolLabels[toolId] ?? toolId}{' '}
                           <code style={{ color: 'var(--muted)' }}>{toolId}</code>
                         </li>
                       ))}

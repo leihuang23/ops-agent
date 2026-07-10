@@ -22,6 +22,22 @@ test('dashboard page exposes anomaly and navigation review surfaces', () => {
   assert.match(nav, /href[:=]\s*['"]\/approvals['"]/);
   assert.match(nav, /href[:=]\s*['"]\/knowledge['"]/);
   assert.match(nav, /href[:=]\s*['"]\/evals['"]/);
+  assert.match(nav, /href[:=]\s*['"]\/tools['"]/);
+});
+
+test('tool registry exposes governed scopes and expandable input/output schemas', () => {
+  const source = readWorkspaceFile('app/tools/page.tsx');
+  const apiSource = readWorkspaceFile('lib/api.ts');
+
+  assert.match(source, /Tool registry/);
+  assert.match(source, /Permission scope/);
+  assert.match(source, /Input schema/);
+  assert.match(source, /Output schema/);
+  assert.match(source, /implementation_ref/);
+  assert.match(source, /<details/);
+  assert.match(apiSource, /\/tools/);
+  assert.match(apiSource, /input_schema/);
+  assert.match(apiSource, /output_schema/);
 });
 
 test('incident page exposes evidence needed before launching an investigation', () => {
@@ -50,14 +66,23 @@ test('agent run page exposes report, trace, cost, citations, approvals, and step
   assert.match(source, /Tool-step history/);
 });
 
-test('server actions forward demo operator credentials without public env exposure', () => {
+test('server actions fail closed unless the protected operator UI is explicitly enabled', () => {
   const apiSource = readWorkspaceFile('lib/api.ts');
   const actionSource = readWorkspaceFile('app/actions.ts');
+  const operatorSource = readWorkspaceFile('lib/operatorMutations.ts');
+  const layoutSource = readWorkspaceFile('app/layout.tsx');
 
   assert.match(apiSource, /X-Demo-Operator-Token/);
   assert.doesNotMatch(apiSource, /process\.env\.DEMO_OPERATOR_TOKEN/);
   assert.match(actionSource, /process\.env\.DEMO_OPERATOR_TOKEN/);
+  assert.match(actionSource, /requireOperatorMutationsEnabled\(\)/);
+  const exportedActions = actionSource.match(/^export async function /gm) ?? [];
+  const mutationGuards = actionSource.match(/requireOperatorMutationsEnabled\(\);/g) ?? [];
+  assert.equal(mutationGuards.length, exportedActions.length);
   assert.doesNotMatch(actionSource, /NEXT_PUBLIC_DEMO_OPERATOR_TOKEN/);
+  assert.match(operatorSource, /OPERATOR_UI_ENABLED/);
+  assert.match(operatorSource, /throw new Error/);
+  assert.match(layoutSource, /Public read-only demo/);
 });
 
 test('eval studio exposes datasets, per-version runs, results, and regression comparison', () => {

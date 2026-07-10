@@ -19,7 +19,11 @@ from app.agent.schemas import (
     ReportEvidence,
 )
 from app.agent.persistence import AgentRunRecorder, utcnow_naive
-from app.agents.service import DEFAULT_AGENT_ID, DEFAULT_AGENT_VERSION_ID
+from app.agents.service import (
+    DEFAULT_AGENT_ID,
+    DEFAULT_AGENT_VERSION_ID,
+    PHASE6_AGENT_VERSION_ID,
+)
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
@@ -160,7 +164,8 @@ def test_investigation_run_produces_structured_evidence_backed_report(
         "fetch_account_details",
         "search_docs",
         "fetch_support_tickets",
-        "propose_actions",
+        "create_mock_action",
+        "request_approval",
     }
     assert all(step["status"] == "succeeded" for step in tool_steps)
 
@@ -231,7 +236,7 @@ def test_investigation_start_restarts_after_orphaned_running_run(
             id="run_orphaned_running",
             incident_id=incident_id,
             agent_id=DEFAULT_AGENT_ID,
-            agent_version_id=DEFAULT_AGENT_VERSION_ID,
+            agent_version_id=PHASE6_AGENT_VERSION_ID,
             status="running",
             trace_id="local-test-trace",
             input_payload={"incident_id": incident_id},
@@ -340,7 +345,7 @@ def test_investigation_start_reuses_active_queued_run_by_default(
             id="run_active_queued",
             incident_id=incident_id,
             agent_id=DEFAULT_AGENT_ID,
-            agent_version_id=DEFAULT_AGENT_VERSION_ID,
+            agent_version_id=PHASE6_AGENT_VERSION_ID,
             status="queued",
             trace_id=None,
             input_payload={"incident_id": incident_id},
@@ -687,7 +692,7 @@ def test_investigation_fails_visibly_when_action_proposal_fails(
     assert "Action proposal failed: mock action proposal unavailable" in payload["error"]
     assert payload["mock_actions"] == []
     failed_step = next(
-        step for step in payload["steps"] if step["tool_name"] == "propose_actions"
+        step for step in payload["steps"] if step["tool_name"] == "create_mock_action"
     )
     assert failed_step["status"] == "failed"
     assert "mock action proposal unavailable" in failed_step["error"]
@@ -713,7 +718,12 @@ def test_investigation_start_reuses_existing_successful_run_by_default(
             "/agent/investigations",
             json={"incident_id": incident_id, "run_inline": True},
         )
+        initial_step_ids = [step["id"] for step in first_response.json()["steps"]]
         second_response = client.post(
+            "/agent/investigations",
+            json={"incident_id": incident_id, "run_inline": True},
+        )
+        third_response = client.post(
             "/agent/investigations",
             json={"incident_id": incident_id, "run_inline": True},
         )
@@ -722,7 +732,11 @@ def test_investigation_start_reuses_existing_successful_run_by_default(
 
     assert first_response.status_code == 201
     assert second_response.status_code == 200
+    assert third_response.status_code == 200
     assert second_response.json()["id"] == first_response.json()["id"]
+    assert third_response.json()["id"] == first_response.json()["id"]
+    assert [step["id"] for step in second_response.json()["steps"]] == initial_step_ids
+    assert [step["id"] for step in third_response.json()["steps"]] == initial_step_ids
 
 
 def test_investigation_start_backfills_actions_for_existing_successful_run(
@@ -738,7 +752,7 @@ def test_investigation_start_backfills_actions_for_existing_successful_run(
             id="run_success_before_actions",
             incident_id=incident_id,
             agent_id=DEFAULT_AGENT_ID,
-            agent_version_id=DEFAULT_AGENT_VERSION_ID,
+            agent_version_id=PHASE6_AGENT_VERSION_ID,
             status="succeeded",
             trace_id="local-test-trace",
             input_payload={"incident_id": incident_id},
@@ -1304,7 +1318,7 @@ def test_idempotency_key_separates_explicit_and_default_version_selectors(
     assert second.status_code == 201
     assert first.json()["id"] != second.json()["id"]
     assert first.json()["agent_version_id"] == DEFAULT_AGENT_VERSION_ID
-    assert second.json()["agent_version_id"] == DEFAULT_AGENT_VERSION_ID
+    assert second.json()["agent_version_id"] == PHASE6_AGENT_VERSION_ID
 
 
 def test_default_version_idempotency_key_is_stable_across_new_publish(
@@ -1369,8 +1383,8 @@ def test_default_version_idempotency_key_is_stable_across_new_publish(
     first_payload = first.json()
     second_payload = second.json()
     assert second_payload["id"] == first_payload["id"]
-    assert first_payload["agent_version_id"] == DEFAULT_AGENT_VERSION_ID
-    assert second_payload["agent_version_id"] == DEFAULT_AGENT_VERSION_ID
+    assert first_payload["agent_version_id"] == PHASE6_AGENT_VERSION_ID
+    assert second_payload["agent_version_id"] == PHASE6_AGENT_VERSION_ID
 
 
 def test_idempotency_key_does_not_reuse_different_agent_version(

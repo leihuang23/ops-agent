@@ -16,7 +16,11 @@ from app.agent.service import (
     ACTIVE_RUN_STALE_AFTER,
     abandon_orphaned_active_runs,
 )
-from app.agents.service import DEFAULT_AGENT_ID, DEFAULT_AGENT_VERSION_ID
+from app.agents.service import (
+    DEFAULT_AGENT_ID,
+    DEFAULT_AGENT_VERSION_ID,
+    PHASE6_AGENT_VERSION_ID,
+)
 from app.core.config import get_settings
 from app.db.base import Base
 from app.db.session import get_db
@@ -116,7 +120,7 @@ def test_post_runs_pauses_for_high_risk_approvals_then_resumes(
     response = client.post(
         "/runs",
         json={
-            "agent_version_id": DEFAULT_AGENT_VERSION_ID,
+            "agent_version_id": PHASE6_AGENT_VERSION_ID,
             "incident_id": SEEDED_INCIDENT_ID,
             "run_inline": True,
         },
@@ -125,7 +129,7 @@ def test_post_runs_pauses_for_high_risk_approvals_then_resumes(
     assert response.status_code == 202
     payload = response.json()
     assert payload["status"] == "waiting_for_approval"
-    assert payload["agent_version_id"] == DEFAULT_AGENT_VERSION_ID
+    assert payload["agent_version_id"] == PHASE6_AGENT_VERSION_ID
     assert payload["incident_id"] == SEEDED_INCIDENT_ID
     assert payload["final_report"] is not None
     assert payload["steps"]
@@ -615,7 +619,7 @@ def test_post_runs_token_gated_in_demo_env(
         unauthed_create = client.post(
             "/runs",
             json={
-                "agent_version_id": DEFAULT_AGENT_VERSION_ID,
+                "agent_version_id": PHASE6_AGENT_VERSION_ID,
                 "incident_id": SEEDED_INCIDENT_ID,
                 "run_inline": True,
             },
@@ -649,7 +653,7 @@ def test_post_runs_token_gated_in_demo_env(
         authed = client.post(
             "/runs",
             json={
-                "agent_version_id": DEFAULT_AGENT_VERSION_ID,
+                "agent_version_id": PHASE6_AGENT_VERSION_ID,
                 "incident_id": SEEDED_INCIDENT_ID,
                 "run_inline": True,
             },

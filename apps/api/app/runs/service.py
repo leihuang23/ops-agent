@@ -17,7 +17,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.agent.persistence import utcnow_naive
+from app.agent.persistence import AgentRunRecorder, utcnow_naive
 from app.agent.schemas import AgentRunDetail, AgentRunSummary
 from app.agent.service import (
     abandon_orphaned_runs_for_incident,
@@ -167,6 +167,56 @@ def create_control_plane_run(
             "finish or transition it before launching another."
         ) from exc
     return get_run_detail(session, run.id)
+
+
+def record_blocked_control_plane_tool_attempt(
+    session: Session,
+    *,
+    agent_version_id: str,
+    tool_name: str,
+    blocked_reason: str,
+    input_payload: dict[str, Any],
+) -> str:
+    """Persist a denied control-plane tool call as a failed, inspectable run."""
+    detail = create_control_plane_run(
+        session,
+        agent_version_id=agent_version_id,
+        input_payload=input_payload,
+    )
+    run = session.get(AgentRun, detail.id)
+    if run is None:  # pragma: no cover - protected by create_control_plane_run
+        raise RuntimeError(f"Agent run disappeared: {detail.id}")
+
+    now = utcnow_naive()
+    trace_id = f"local-{uuid4().hex[:16]}"
+    run.status = "running"
+    run.started_at = now
+    run.trace_id = trace_id
+    run.trace_provider = "local"
+    run.trace_url = f"local://agent-runs/{run.id}/traces/{trace_id}"
+    run.trace_metadata = {
+        "reason": "tool permission policy denied dispatch",
+        "blocked_tool": tool_name,
+    }
+    run.updated_at = now
+    session.commit()
+
+    AgentRunRecorder(session, run).record_blocked(
+        stage=f"invoke {tool_name}",
+        tool_name=tool_name,
+        inputs=input_payload,
+        blocked_reason=blocked_reason,
+        fallback_output={"tool_disabled": True, "dispatched": False},
+    )
+
+    completed_at = utcnow_naive()
+    run.status = "failed"
+    run.error = f"{tool_name} blocked: {blocked_reason}"
+    run.completed_at = completed_at
+    run.updated_at = completed_at
+    session.commit()
+    invalidate_run_detail_cache(run.id)
+    return run.id
 
 
 def transition_run(session: Session, run_id: str, target: str) -> AgentRunDetail:

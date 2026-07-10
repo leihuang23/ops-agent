@@ -24,7 +24,11 @@ from app.evals.runner import (
     score_root_cause,
 )
 from app.main import app
-from app.models import AgentRun, EvalCase, EvalResult
+from app.agents.service import (
+    DEFAULT_AGENT_ID,
+    PHASE6_AGENT_VERSION_ID,
+)
+from app.models import AgentRun, AgentVersion, EvalCase, EvalResult
 from app.seed import SCENARIOS, reseed_database
 
 
@@ -97,6 +101,42 @@ def test_eval_suite_persists_scoring_shape_and_trace_links(
         assert all(run.trace_provider in {"langfuse", "langsmith", "local"} for run in runs)
 
 
+def test_legacy_eval_suite_is_pinned_to_the_phase6_baseline(
+    session_factory: Callable[[], Session],
+) -> None:
+    with session_factory() as session:
+        reseed_database(session)
+        phase6 = session.get(AgentVersion, PHASE6_AGENT_VERSION_ID)
+        assert phase6 is not None
+        session.add(
+            AgentVersion(
+                id="newer-review-candidate",
+                agent_id=DEFAULT_AGENT_ID,
+                version_number=99,
+                semantic_version="99.0.0",
+                status="published",
+                system_prompt=phase6.system_prompt,
+                model=phase6.model,
+                temperature=phase6.temperature,
+                max_tokens=phase6.max_tokens,
+                enabled_tool_ids=[],
+                allowed_scopes=[],
+                published_at=phase6.published_at,
+                published_by="test",
+                forked_from_version_id=phase6.id,
+                created_at=phase6.created_at,
+                updated_at=phase6.updated_at,
+            )
+        )
+        session.commit()
+
+        summary = run_eval_suite(session)
+
+    assert {result.agent_version_id for result in summary.results} == {
+        PHASE6_AGENT_VERSION_ID
+    }
+
+
 def test_latest_eval_results_ignore_incomplete_runs(
     session_factory: Callable[[], Session],
 ) -> None:
@@ -147,7 +187,7 @@ def test_latest_legacy_eval_results_ignore_phase5_dataset_runs(
             session,
             eval_run_id="evalrun_phase5_newer",
             dataset_id="mrr-drop-suite",
-            agent_version_id="revenue-ops-agent_degraded",
+            agent_version_id="revenue-ops-agent_phase6_degraded",
         )
 
         latest = list_latest_eval_results(session)
@@ -343,6 +383,47 @@ def test_eval_api_runs_suite_and_lists_latest_results(
     assert all("root_cause_score" in result for result in results_payload["results"])
 
 
+def test_legacy_eval_api_records_phase6_permission_blocks(
+    session_factory: Callable[[], Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with session_factory() as session:
+        reseed_database(session)
+        phase6 = session.get(AgentVersion, PHASE6_AGENT_VERSION_ID)
+        assert phase6 is not None
+        phase6.allowed_scopes = [
+            scope for scope in phase6.allowed_scopes if scope != "run_eval"
+        ]
+        session.commit()
+
+    def override_get_db() -> Generator[Session, None, None]:
+        with session_factory() as db:
+            yield db
+
+    monkeypatch.setenv("EVAL_RUN_TOKEN", "eval-token")
+    get_settings.cache_clear()
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        response = TestClient(app).post(
+            "/evals/run",
+            headers={"X-Eval-Run-Token": "eval-token"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+        get_settings.cache_clear()
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "run_eval blocked: scope_not_allowed"
+    blocked_run_id = response.headers["X-Agent-Run-Id"]
+    with session_factory() as session:
+        blocked_run = session.get(AgentRun, blocked_run_id)
+        assert blocked_run is not None
+        assert blocked_run.status == "failed"
+        assert blocked_run.agent_version_id == PHASE6_AGENT_VERSION_ID
+        assert blocked_run.steps[-1].tool_name == "run_eval"
+        assert blocked_run.steps[-1].status == "blocked"
+
+
 def test_eval_suite_persists_failed_result_when_one_case_raises(
     session_factory: Callable[[], Session],
     monkeypatch: pytest.MonkeyPatch,
@@ -356,10 +437,21 @@ def test_eval_suite_persists_failed_result_when_one_case_raises(
 
     original_start = start_investigation_run
 
-    def flaky_start(session: Session, incident_id: str, *, force: bool = False):
+    def flaky_start(
+        session: Session,
+        incident_id: str,
+        *,
+        force: bool = False,
+        agent_version_id: str | None = None,
+    ):
         if incident_id == failing_incident_id:
             raise RuntimeError("simulated investigation failure")
-        return original_start(session, incident_id, force=force)
+        return original_start(
+            session,
+            incident_id,
+            force=force,
+            agent_version_id=agent_version_id,
+        )
 
     monkeypatch.setattr("app.evals.runner.start_investigation_run", flaky_start)
 
