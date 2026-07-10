@@ -4,6 +4,7 @@ import argparse
 import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from math import ceil
 from time import perf_counter
 from typing import Any, Literal
 from uuid import uuid4
@@ -19,9 +20,10 @@ from app.agents.service import DEFAULT_AGENT_ID, DEFAULT_AGENT_VERSION_ID
 from app.celery_app import CELERY_TASK_TIME_LIMIT
 from app.db.session import SessionLocal
 from app.evals.schemas import EvalResultsReport, EvalResultRead, EvalRunSummary
-from app.models import AgentRun, EvalCase, EvalResult
+from app.models import AgentRun, EvalCase, EvalDatasetCase, EvalResult
 
 PASSING_SCENARIO_THRESHOLD = 4
+DATASET_PASS_RATE = 0.8
 # A partial eval run whose newest result is older than this threshold is treated
 # as a dead worker (hard kill, crash, OOM) rather than an in-flight suite, so
 # build_eval_run_summary self-heals it to a terminal "failed" status instead of
@@ -55,9 +57,19 @@ MONTH_TOKEN_ALIASES = {"june": "06"}
 
 
 def run_eval_suite(
-    session: Session, *, eval_run_id: str | None = None
+    session: Session,
+    *,
+    eval_run_id: str | None = None,
+    dataset_id: str | None = None,
+    agent_version_id: str | None = None,
 ) -> EvalRunSummary:
-    cases = session.scalars(select(EvalCase).order_by(EvalCase.id)).all()
+    case_stmt = select(EvalCase)
+    if dataset_id is not None:
+        case_stmt = case_stmt.join(
+            EvalDatasetCase,
+            EvalDatasetCase.eval_case_id == EvalCase.id,
+        ).where(EvalDatasetCase.dataset_id == dataset_id)
+    cases = session.scalars(case_stmt.order_by(EvalCase.id)).all()
     started_at = utcnow_naive()
     if eval_run_id is None:
         eval_run_id = f"evalrun_{uuid4().hex[:16]}"
@@ -67,11 +79,17 @@ def run_eval_suite(
         case_start = utcnow_naive()
         latency_start = perf_counter()
         try:
-            run_detail, _created = start_investigation_run(
-                session,
-                case.incident_id,
-                force=True,
-            )
+            if agent_version_id is None:
+                run_detail, _created = start_investigation_run(
+                    session, case.incident_id, force=True
+                )
+            else:
+                run_detail, _created = start_investigation_run(
+                    session,
+                    case.incident_id,
+                    force=True,
+                    agent_version_id=agent_version_id,
+                )
             latency_ms = int((perf_counter() - latency_start) * 1000)
             case_completed = utcnow_naive()
             result = _build_eval_result(
@@ -81,6 +99,7 @@ def run_eval_suite(
                 latency_ms=latency_ms,
                 started_at=case_start,
                 completed_at=case_completed,
+                dataset_id=dataset_id,
             )
         except Exception as exc:
             latency_ms = int((perf_counter() - latency_start) * 1000)
@@ -91,6 +110,7 @@ def run_eval_suite(
                 error=str(exc),
                 started_at=case_start,
                 completed_at=case_completed,
+                agent_version_id=agent_version_id,
             )
             result = _build_failed_eval_result(
                 eval_run_id=eval_run_id,
@@ -100,6 +120,8 @@ def run_eval_suite(
                 latency_ms=latency_ms,
                 started_at=case_start,
                 completed_at=case_completed,
+                dataset_id=dataset_id,
+                agent_version_id=agent_version_id,
             )
         # Persist each result incrementally so that a Celery timeout or
         # process crash does not lose already-completed cases.
@@ -114,10 +136,14 @@ def run_eval_suite(
     completed_at = utcnow_naive()
     passed_scenarios = sum(result.passed for result in results)
     failed_scenarios = len(results) - passed_scenarios
+    passing_threshold = _passing_scenario_threshold(
+        dataset_id=dataset_id,
+        expected_case_count=len(results),
+    )
     return EvalRunSummary(
         eval_run_id=eval_run_id,
         status="passed"
-        if passed_scenarios >= PASSING_SCENARIO_THRESHOLD
+        if passed_scenarios >= passing_threshold
         else "failed",
         total_scenarios=len(results),
         passed_scenarios=passed_scenarios,
@@ -143,6 +169,7 @@ def list_latest_eval_results(session: Session) -> EvalResultsReport:
 
     latest_eval_run_id = session.scalar(
         select(EvalResult.eval_run_id)
+        .where(EvalResult.dataset_id.is_(None))
         .group_by(EvalResult.eval_run_id)
         .having(func.count(EvalResult.id) >= expected_case_count)
         .having(func.count(func.distinct(EvalResult.eval_case_id)) == expected_case_count)
@@ -160,7 +187,10 @@ def list_latest_eval_results(session: Session) -> EvalResultsReport:
 
     results = session.scalars(
         select(EvalResult)
-        .where(EvalResult.eval_run_id == latest_eval_run_id)
+        .where(
+            EvalResult.eval_run_id == latest_eval_run_id,
+            EvalResult.dataset_id.is_(None),
+        )
         .order_by(EvalResult.scenario)
     ).all()
     result_reads = [eval_result_to_read(result) for result in results]
@@ -186,9 +216,6 @@ def build_eval_run_summary(
     in flight). Returns ``passed``/``failed`` once all expected cases have a
     persisted result.
     """
-    expected_case_count = int(
-        session.scalar(select(func.count(EvalCase.id)).select_from(EvalCase)) or 0
-    )
     results = session.scalars(
         select(EvalResult)
         .where(EvalResult.eval_run_id == eval_run_id)
@@ -196,6 +223,16 @@ def build_eval_run_summary(
     ).all()
     if not results:
         return None
+
+    dataset_id = results[0].dataset_id
+    expected_case_count = _expected_case_count(
+        session,
+        dataset_id=dataset_id,
+    )
+    passing_threshold = _passing_scenario_threshold(
+        dataset_id=dataset_id,
+        expected_case_count=expected_case_count,
+    )
 
     result_reads = [eval_result_to_read(result) for result in results]
     passed_scenarios = sum(result.passed for result in result_reads)
@@ -216,7 +253,7 @@ def build_eval_run_summary(
             result.completed_at for result in results
         )
         status: Literal["passed", "failed", "running"] = (
-            "passed" if passed_scenarios >= PASSING_SCENARIO_THRESHOLD else "failed"
+            "passed" if passed_scenarios >= passing_threshold else "failed"
         )
     elif is_stale:
         completed_at = max(result.completed_at for result in results)
@@ -236,6 +273,26 @@ def build_eval_run_summary(
     )
 
 
+def _expected_case_count(session: Session, *, dataset_id: str | None) -> int:
+    if dataset_id is None:
+        stmt = select(func.count(EvalCase.id)).select_from(EvalCase)
+    else:
+        stmt = (
+            select(func.count(EvalDatasetCase.eval_case_id))
+            .select_from(EvalDatasetCase)
+            .where(EvalDatasetCase.dataset_id == dataset_id)
+        )
+    return int(session.scalar(stmt) or 0)
+
+
+def _passing_scenario_threshold(
+    *, dataset_id: str | None, expected_case_count: int
+) -> int:
+    if dataset_id is None:
+        return PASSING_SCENARIO_THRESHOLD
+    return ceil(expected_case_count * DATASET_PASS_RATE)
+
+
 def _build_eval_result(
     *,
     eval_run_id: str,
@@ -244,6 +301,7 @@ def _build_eval_result(
     latency_ms: int,
     started_at: datetime,
     completed_at: datetime,
+    dataset_id: str | None = None,
 ) -> EvalResult:
     scores = score_eval_case(case, run_detail)
     status = "passed" if scores["passed"] else "failed"
@@ -253,6 +311,8 @@ def _build_eval_result(
         eval_run_id=eval_run_id,
         eval_case_id=case.id,
         agent_run_id=run_detail.id,
+        agent_version_id=run_detail.agent_version_id,
+        dataset_id=dataset_id,
         scenario=case.scenario,
         status=status,
         passed=bool(scores["passed"]),
@@ -260,6 +320,7 @@ def _build_eval_result(
         citation_quality_score=float(scores["citation_quality_score"]),
         action_safety_score=float(scores["action_safety_score"]),
         latency_ms=latency_ms,
+        cost_estimate_usd=run_detail.cost_estimate_usd,
         expected_root_cause=case.expected_root_cause,
         actual_root_cause=scores["actual_root_cause"],
         expected_evidence_types=list(case.expected_evidence_types),
@@ -280,6 +341,7 @@ def _record_failed_agent_run(
     error: str,
     started_at: datetime,
     completed_at: datetime,
+    agent_version_id: str | None = None,
 ) -> AgentRun:
     """Persist a failed AgentRun so the eval dead end is visible in run history.
 
@@ -292,7 +354,7 @@ def _record_failed_agent_run(
         id=f"run_failed_{uuid4().hex[:16]}",
         incident_id=incident_id,
         agent_id=DEFAULT_AGENT_ID,
-        agent_version_id=DEFAULT_AGENT_VERSION_ID,
+        agent_version_id=agent_version_id or DEFAULT_AGENT_VERSION_ID,
         status="failed",
         trace_id=None,
         trace_url=None,
@@ -324,6 +386,8 @@ def _build_failed_eval_result(
     latency_ms: int,
     started_at: datetime,
     completed_at: datetime,
+    dataset_id: str | None = None,
+    agent_version_id: str | None = None,
 ) -> EvalResult:
     now = utcnow_naive()
     return EvalResult(
@@ -331,6 +395,8 @@ def _build_failed_eval_result(
         eval_run_id=eval_run_id,
         eval_case_id=case.id,
         agent_run_id=failed_run.id,
+        agent_version_id=agent_version_id or failed_run.agent_version_id,
+        dataset_id=dataset_id,
         scenario=case.scenario,
         status="failed",
         passed=False,
@@ -338,6 +404,7 @@ def _build_failed_eval_result(
         citation_quality_score=0.0,
         action_safety_score=1.0,
         latency_ms=latency_ms,
+        cost_estimate_usd=failed_run.cost_estimate_usd,
         expected_root_cause=case.expected_root_cause,
         actual_root_cause=None,
         expected_evidence_types=list(case.expected_evidence_types),
@@ -558,6 +625,8 @@ def eval_result_to_read(result: EvalResult) -> EvalResultRead:
         eval_run_id=result.eval_run_id,
         eval_case_id=result.eval_case_id,
         agent_run_id=result.agent_run_id,
+        agent_version_id=result.agent_version_id,
+        dataset_id=result.dataset_id,
         scenario=result.scenario,
         status=result.status,
         passed=result.passed,
@@ -565,6 +634,7 @@ def eval_result_to_read(result: EvalResult) -> EvalResultRead:
         citation_quality_score=result.citation_quality_score,
         action_safety_score=result.action_safety_score,
         latency_ms=result.latency_ms,
+        cost_estimate_usd=result.cost_estimate_usd,
         expected_root_cause=result.expected_root_cause,
         actual_root_cause=result.actual_root_cause,
         expected_evidence_types=result.expected_evidence_types,

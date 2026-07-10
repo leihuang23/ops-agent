@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 test.describe('control-plane run', () => {
-  test('launch a run from the agent version page and reach succeeded', async ({ page }) => {
+  test('launch a run from the agent version page and reach an auditable outcome', async ({ page }) => {
     test.setTimeout(180000);
 
     // Navigate from the agents registry into the default agent.
@@ -32,15 +32,17 @@ test.describe('control-plane run', () => {
     await page.waitForURL(/\/runs\//, { timeout: 30000 });
 
     // The run executes inline during the server action; poll until it reaches
-    // succeeded (RunRefresh auto-refreshes, but reload to be safe in CI).
+    // succeeded or waits at the explicit high-risk approval gate. RunRefresh
+    // auto-refreshes, but reload to be safe in CI.
     await expect(async () => {
       await page.reload();
-      await expect(page.locator('.run-status-succeeded').first()).toBeVisible({
-        timeout: 5000,
-      });
+      await expect(
+        page.locator('.run-status-succeeded, .run-status-waiting_for_approval').first(),
+      ).toBeVisible({ timeout: 5000 });
     }).toPass({ timeout: 120000 });
 
-    // The final report's root cause is surfaced once the run succeeds.
+    // The report is available before a possible approval wait, keeping the
+    // proposed action and its evidence reviewable at the gate.
     await expect(page.getByRole('heading', { name: 'Root cause' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Cited evidence' })).toBeVisible();
   });

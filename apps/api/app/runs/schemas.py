@@ -25,12 +25,11 @@ class RunCreate(BaseModel):
 class RunTransitionRequest(BaseModel):
     """Body for ``POST /runs/{id}/transitions`` (FR-9).
 
-    Only the Phase 3 operator-reachable targets are accepted.
+    Only operator-reachable targets are accepted.
     ``waiting_for_approval`` is deliberately omitted from the API surface: the
     state machine (``app.runs.lifecycle.VALID_TRANSITIONS``) permits it for
-    forward-compatibility with Phase 5, but no worker resumes a paused run in
-    Phase 3, so allowing an operator to strand a run there would leave it
-    unrecoverable until a further manual transition.
+    the Phase 5 system-managed approval checkpoint, but an operator cannot
+    force a run into that state without a corresponding pending approval.
     """
 
     status: Literal["queued", "running", "succeeded", "failed"]

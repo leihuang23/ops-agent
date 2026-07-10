@@ -104,11 +104,12 @@ def _make_run(
     return run
 
 
-def test_post_runs_launches_incident_run_to_succeeded(
+def test_post_runs_pauses_for_high_risk_approvals_then_resumes(
     session_factory: Callable[[], Session],
 ) -> None:
-    """I-12 / P3-T11: POST /runs against published v1 with a seeded incident
-    returns 202, and the inline run reaches ``succeeded`` with a final report."""
+    """I-12 / I-19 / P5-T13: a control-plane run persists its report and
+    pauses while high-risk mock actions need decisions. Resolving every pending
+    approval resumes the run through ``running`` to ``succeeded``."""
     _seed(session_factory)
     client, _ = _client_with_db(session_factory)
 
@@ -123,12 +124,38 @@ def test_post_runs_launches_incident_run_to_succeeded(
 
     assert response.status_code == 202
     payload = response.json()
-    assert payload["status"] == "succeeded"
+    assert payload["status"] == "waiting_for_approval"
     assert payload["agent_version_id"] == DEFAULT_AGENT_VERSION_ID
     assert payload["incident_id"] == SEEDED_INCIDENT_ID
     assert payload["final_report"] is not None
     assert payload["steps"]
     assert payload["trace_id"]
+    pending = [
+        action["approval_request"]
+        for action in payload["mock_actions"]
+        if action["approval_request"] is not None
+        and action["approval_request"]["status"] == "pending"
+    ]
+    assert len(pending) == 2
+
+    first = client.post(
+        f"/approvals/{pending[0]['id']}/approve",
+        json={"notes": "Approved for mock execution."},
+    )
+    assert first.status_code == 200
+    still_waiting = client.get(f"/runs/{payload['id']}")
+    assert still_waiting.status_code == 200
+    assert still_waiting.json()["status"] == "waiting_for_approval"
+
+    second = client.post(
+        f"/approvals/{pending[1]['id']}/reject",
+        json={"notes": "Rejected after operator review."},
+    )
+    assert second.status_code == 200
+    completed = client.get(f"/runs/{payload['id']}")
+    assert completed.status_code == 200
+    assert completed.json()["status"] == "succeeded"
+    assert completed.json()["completed_at"] is not None
 
 
 def test_post_runs_self_heals_stale_run_before_insert(
@@ -240,10 +267,9 @@ def test_transition_unknown_run_returns_404(
 def test_transition_to_waiting_for_approval_rejected_by_api(
     session_factory: Callable[[], Session],
 ) -> None:
-    """Phase 3 does not ship workflow pausing on ``waiting_for_approval`` (only
-    the state-machine helper is forward-compatible). The operator transition API
-    must reject it (422) so a run cannot be stranded in an unrecoverable state
-    with no reaper coverage and no resume worker."""
+    """The Phase 5 approval checkpoint is system-managed. The operator
+    transition API must still reject it (422) so a run cannot be stranded in a
+    waiting state without a corresponding pending approval."""
     _seed(session_factory)
     client, _ = _client_with_db(session_factory)
 
@@ -261,11 +287,41 @@ def test_transition_to_waiting_for_approval_rejected_by_api(
         json={"status": "waiting_for_approval"},
     )
     assert response.status_code == 422
-    # The state machine still permits it (forward-compat); only the API surface
+    # The state machine permits the internal checkpoint; only the operator API
     # omits it. Verify the helper itself still accepts the transition.
     from app.runs.lifecycle import validate_transition
 
     validate_transition("running", "waiting_for_approval")  # no raise
+
+
+def test_operator_cannot_resume_system_managed_approval_checkpoint(
+    session_factory: Callable[[], Session],
+) -> None:
+    _seed(session_factory)
+    client, _ = _client_with_db(session_factory)
+
+    with session_factory() as session:
+        _make_run(
+            session,
+            run_id="run_waiting_resume_rejected",
+            status="waiting_for_approval",
+            incident_id=SEEDED_INCIDENT_ID,
+            started_at=utcnow_naive(),
+        )
+
+    resume = client.post(
+        "/runs/run_waiting_resume_rejected/transitions",
+        json={"status": "running"},
+    )
+    assert resume.status_code == 409
+    assert "system-managed" in resume.json()["detail"]
+
+    cancel = client.post(
+        "/runs/run_waiting_resume_rejected/transitions",
+        json={"status": "failed"},
+    )
+    assert cancel.status_code == 200
+    assert cancel.json()["status"] == "failed"
 
 
 def test_transition_sets_timestamps_for_target_state(
@@ -600,7 +656,7 @@ def test_post_runs_token_gated_in_demo_env(
             headers={"X-Demo-Operator-Token": "demo-secret"},
         )
         assert authed.status_code == 202
-        assert authed.json()["status"] == "succeeded"
+        assert authed.json()["status"] == "waiting_for_approval"
     finally:
         get_settings.cache_clear()
 

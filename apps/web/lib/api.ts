@@ -394,6 +394,7 @@ export type ActionAuditEvent = {
 export type ApprovalRequestSummary = {
   id: string;
   run_id: string;
+  agent_version_id: string;
   action_id: string;
   status: ApprovalStatus;
   risk_level: RiskLevel;
@@ -561,6 +562,8 @@ export type EvalResult = {
   eval_run_id: string;
   eval_case_id: string;
   agent_run_id: string;
+  agent_version_id: string | null;
+  dataset_id: string | null;
   scenario: string;
   status: EvalStatus;
   passed: boolean;
@@ -568,6 +571,7 @@ export type EvalResult = {
   citation_quality_score: number;
   action_safety_score: number;
   latency_ms: number;
+  cost_estimate_usd: number;
   expected_root_cause: string;
   actual_root_cause: string | null;
   expected_evidence_types: string[];
@@ -580,6 +584,65 @@ export type EvalResult = {
   started_at: string;
   completed_at: string;
   created_at: string;
+};
+
+export type EvalDatasetCase = {
+  id: string;
+  scenario: string;
+  incident_id: string;
+  title: string;
+  expected_root_cause: string;
+  expected_evidence_types: string[];
+  expected_evidence: string[];
+  false_leads: string[];
+  recommended_actions: string[];
+};
+
+export type EvalDatasetSummary = {
+  id: string;
+  name: string;
+  description: string;
+  case_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EvalDatasetDetail = Omit<EvalDatasetSummary, 'case_count'> & {
+  cases: EvalDatasetCase[];
+};
+
+export type EvalComparisonOutcome = 'unchanged' | 'regression' | 'improvement';
+
+export type EvalComparisonCase = {
+  eval_case_id: string;
+  scenario: string;
+  result_a_id: string;
+  result_b_id: string;
+  passed_a: boolean;
+  passed_b: boolean;
+  change: EvalComparisonOutcome;
+};
+
+export type EvalComparison = {
+  dataset_id: string;
+  version_a: string;
+  version_b: string;
+  run_a_id: string;
+  run_b_id: string;
+  pass_rate_a: number;
+  pass_rate_b: number;
+  pass_rate_delta: number;
+  total_cases: number;
+  regressions: EvalComparisonCase[];
+  improvements: EvalComparisonCase[];
+  cases: EvalComparisonCase[];
+};
+
+export type EvalDatasetRunAccepted = {
+  eval_run_id: string;
+  dataset_id: string;
+  agent_version_id: string;
+  status: 'queued';
 };
 
 export type EvalRunSummary = {
@@ -603,6 +666,26 @@ export type EvalResultsReport = {
 
 export type EvalRunResult =
   | { ok: true; data: EvalRunSummary }
+  | { ok: false; error: string };
+
+export type EvalDatasetListResult =
+  | { ok: true; data: { datasets: EvalDatasetSummary[]; total: number } }
+  | { ok: false; error: string };
+
+export type EvalDatasetDetailResult =
+  | { ok: true; data: EvalDatasetDetail }
+  | { ok: false; error: string };
+
+export type EvalResultListResult =
+  | { ok: true; data: { results: EvalResult[]; total: number } }
+  | { ok: false; error: string };
+
+export type EvalDatasetRunResult =
+  | { ok: true; data: EvalDatasetRunAccepted }
+  | { ok: false; error: string };
+
+export type EvalComparisonResult =
+  | { ok: true; data: EvalComparison }
   | { ok: false; error: string };
 
 export type EvalResultsReportResult =
@@ -714,6 +797,10 @@ export type PublishVersionResult =
 
 type DemoOperatorOptions = {
   demoOperatorToken?: string;
+};
+
+type EvalRunOptions = DemoOperatorOptions & {
+  evalRunToken?: string;
 };
 
 async function readErrorMessage(response: Response, fallback: string): Promise<string> {
@@ -1293,6 +1380,190 @@ export async function getEvalResults(): Promise<EvalResultsReportResult> {
   }
 }
 
+export async function listEvalDatasets(): Promise<EvalDatasetListResult> {
+  try {
+    const response = await fetch(`${resolveApiBaseUrl()}/eval-datasets`, {
+      cache: 'no-store',
+    });
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        error: await readErrorMessage(
+          response,
+          `Eval datasets endpoint returned HTTP ${response.status}`,
+        ),
+      };
+    }
+
+    return {
+      ok: true,
+      data: (await response.json()) as { datasets: EvalDatasetSummary[]; total: number },
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : 'Eval datasets unavailable',
+    };
+  }
+}
+
+export async function getEvalDataset(
+  datasetId: string,
+): Promise<EvalDatasetDetailResult> {
+  try {
+    const response = await fetch(
+      `${resolveApiBaseUrl()}/eval-datasets/${encodeURIComponent(datasetId)}`,
+      { cache: 'no-store' },
+    );
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        error: await readErrorMessage(
+          response,
+          `Eval dataset endpoint returned HTTP ${response.status}`,
+        ),
+      };
+    }
+
+    return {
+      ok: true,
+      data: (await response.json()) as EvalDatasetDetail,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : 'Eval dataset unavailable',
+    };
+  }
+}
+
+export async function runEvalDataset(
+  datasetId: string,
+  agentVersionId: string,
+  options: EvalRunOptions = {},
+): Promise<EvalDatasetRunResult> {
+  try {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...demoOperatorHeaders(options.demoOperatorToken),
+    };
+    if (options.evalRunToken) {
+      headers['X-Eval-Run-Token'] = options.evalRunToken;
+    }
+
+    const response = await fetch(
+      `${resolveApiBaseUrl()}/eval-datasets/${encodeURIComponent(datasetId)}/run`,
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ agent_version_id: agentVersionId }),
+        cache: 'no-store',
+      },
+    );
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        error: await readErrorMessage(
+          response,
+          `Eval dataset run returned HTTP ${response.status}`,
+        ),
+      };
+    }
+
+    return {
+      ok: true,
+      data: (await response.json()) as EvalDatasetRunAccepted,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : 'Eval dataset run unavailable',
+    };
+  }
+}
+
+export async function listEvalResults(
+  options: { agent_version_id?: string; dataset_id?: string } = {},
+): Promise<EvalResultListResult> {
+  try {
+    const params = new URLSearchParams();
+    if (options.agent_version_id) {
+      params.set('agent_version_id', options.agent_version_id);
+    }
+    if (options.dataset_id) {
+      params.set('dataset_id', options.dataset_id);
+    }
+    const query = params.toString();
+    const response = await fetch(
+      `${resolveApiBaseUrl()}/eval-results${query ? `?${query}` : ''}`,
+      { cache: 'no-store' },
+    );
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        error: await readErrorMessage(
+          response,
+          `Eval results endpoint returned HTTP ${response.status}`,
+        ),
+      };
+    }
+
+    return {
+      ok: true,
+      data: (await response.json()) as { results: EvalResult[]; total: number },
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : 'Eval results unavailable',
+    };
+  }
+}
+
+export async function compareEvalResults(options: {
+  version_a: string;
+  version_b: string;
+  dataset_id?: string;
+}): Promise<EvalComparisonResult> {
+  try {
+    const params = new URLSearchParams({
+      version_a: options.version_a,
+      version_b: options.version_b,
+    });
+    if (options.dataset_id) {
+      params.set('dataset_id', options.dataset_id);
+    }
+    const response = await fetch(
+      `${resolveApiBaseUrl()}/eval-results/compare?${params.toString()}`,
+      { cache: 'no-store' },
+    );
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        error: await readErrorMessage(
+          response,
+          `Eval comparison endpoint returned HTTP ${response.status}`,
+        ),
+      };
+    }
+
+    return {
+      ok: true,
+      data: (await response.json()) as EvalComparison,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : 'Eval comparison unavailable',
+    };
+  }
+}
+
 export type ApprovalRequestListResult =
   | { ok: true; data: ApprovalRequest[] }
   | { ok: false; error: string };
@@ -1306,11 +1577,25 @@ export type SupportTicketDetailResult =
   | { ok: false; error: string };
 
 export async function listApprovalRequests(
-  status?: ApprovalStatus,
+  options: {
+    status?: ApprovalStatus;
+    agent_version_id?: string;
+    risk_level?: RiskLevel;
+  } = {},
 ): Promise<ApprovalRequestListResult> {
   try {
-    const params = status ? `?status=${encodeURIComponent(status)}` : '';
-    const response = await fetch(`${resolveApiBaseUrl()}/approvals${params}`, {
+    const params = new URLSearchParams();
+    if (options.status) {
+      params.set('status', options.status);
+    }
+    if (options.agent_version_id) {
+      params.set('agent_version_id', options.agent_version_id);
+    }
+    if (options.risk_level) {
+      params.set('risk_level', options.risk_level);
+    }
+    const query = params.toString();
+    const response = await fetch(`${resolveApiBaseUrl()}/approvals${query ? `?${query}` : ''}`, {
       cache: 'no-store',
     });
 

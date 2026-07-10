@@ -27,7 +27,7 @@ from app.agent.service import (
 from app.agents.service import get_published_version
 from app.logging_config import get_logger
 from app.models import AgentRun, Incident
-from app.runs.lifecycle import validate_transition
+from app.runs.lifecycle import validate_operator_transition
 
 logger = get_logger(__name__)
 
@@ -119,6 +119,7 @@ def create_control_plane_run(
     now = utcnow_naive()
     run_id = f"run_{uuid4().hex[:16]}"
     payload = dict(input_payload or {})
+    payload["run_surface"] = "control_plane"
     if incident_id is not None:
         payload.setdefault("incident_id", incident_id)
     payload["agent_version"] = {
@@ -188,7 +189,7 @@ def transition_run(session: Session, run_id: str, target: str) -> AgentRunDetail
     if run is None:
         raise LookupError(f"Unknown agent run id: {run_id}")
     from_status = run.status
-    validate_transition(from_status, target)
+    validate_operator_transition(from_status, target)
     now = utcnow_naive()
     values: dict[str, Any] = {"status": target, "updated_at": now}
     if target in ("succeeded", "failed"):

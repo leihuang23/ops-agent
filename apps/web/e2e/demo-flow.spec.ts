@@ -33,18 +33,18 @@ test.describe('demo flow', () => {
     await page.waitForURL('/approvals');
     await expect(page.locator('.action-approved').first()).toBeVisible();
 
-    // Run the eval suite and assert all scenarios pass.
+    // Run the selected Phase 5 dataset and wait for persisted per-case results.
     await page.getByRole('navigation').getByRole('link', { name: 'Evals' }).click();
     await page.waitForURL('/evals');
-    await expect(page.getByRole('heading', { name: 'Investigation eval report' })).toBeVisible();
-    await page.locator('button:has-text("Run Suite")').click();
-    await page.waitForURL('/evals');
-    // The eval suite runs asynchronously via Celery and the evals page is
+    await expect(page.getByRole('heading', { name: 'Eval Studio' })).toBeVisible();
+    await page.getByRole('button', { name: 'Run selected dataset' }).click();
+    await page.waitForURL(/\/evals\?/);
+    // The eval dataset runs asynchronously via Celery and the evals page is
     // server-side rendered, so it will not update until reloaded.  Poll by
-    // reloading the page until the summary line appears.
+    // reloading the page until a per-case result appears.
     await expect(async () => {
       await page.reload();
-      await expect(page.getByText(/\d[\d,]* passed \/ \d[\d,]* failed/)).toBeVisible({
+      await expect(page.locator('.eval-results-panel tbody tr').first()).toBeVisible({
         timeout: 5000,
       });
     }).toPass({ timeout: 120000 });

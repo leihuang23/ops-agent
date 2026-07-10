@@ -6,9 +6,9 @@ failed``); ``app.runs.service.transition_run`` exposes operator/API-level
 advancement through ``POST /runs/{id}/transitions`` and maps an
 ``IllegalTransition`` to HTTP 409 (FR-9, I-14).
 
-Phase 3 ships only the table + validator. Workflow pausing on
-``waiting_for_approval`` (PRD I-19) is Phase 5; the table permits the
-``running <-> waiting_for_approval`` transitions now so it is forward-compatible.
+Phase 5 uses ``running <-> waiting_for_approval`` for the system-managed
+approval checkpoint. The operator transition API still cannot place a run into
+that state directly; only the action proposal and approval decision paths own it.
 """
 
 from __future__ import annotations
@@ -50,4 +50,14 @@ def validate_transition(current: str, target: str) -> None:
     if target not in VALID_TRANSITIONS[current]:
         raise IllegalTransition(
             f"Illegal run status transition: {current!r} -> {target!r}"
+        )
+
+
+def validate_operator_transition(current: str, target: str) -> None:
+    """Validate an API/operator transition without bypassing system checkpoints."""
+    validate_transition(current, target)
+    if current == "waiting_for_approval" and target == "running":
+        raise IllegalTransition(
+            "Approval checkpoint resume is system-managed; decide every pending "
+            "approval or transition the run to 'failed'."
         )

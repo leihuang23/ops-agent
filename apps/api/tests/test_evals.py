@@ -12,7 +12,11 @@ import app.models  # noqa: F401
 from app.core.config import get_settings
 from app.db.base import Base
 from app.db.session import get_db
-from app.agent.service import start_investigation_run
+from app.agent.service import (
+    _invalidate_run_detail_cache,
+    create_investigation_run,
+    start_investigation_run,
+)
 from app.evals.runner import (
     list_latest_eval_results,
     run_eval_suite,
@@ -131,6 +135,56 @@ def test_latest_eval_results_ignore_incomplete_runs(
 
         assert latest.latest_eval_run_id == summary.eval_run_id
         assert len(latest.results) == 6
+
+
+def test_latest_legacy_eval_results_ignore_phase5_dataset_runs(
+    session_factory: Callable[[], Session],
+) -> None:
+    with session_factory() as session:
+        reseed_database(session)
+        legacy = run_eval_suite(session, eval_run_id="evalrun_legacy_contract")
+        run_eval_suite(
+            session,
+            eval_run_id="evalrun_phase5_newer",
+            dataset_id="mrr-drop-suite",
+            agent_version_id="revenue-ops-agent_degraded",
+        )
+
+        latest = list_latest_eval_results(session)
+
+    assert latest.latest_eval_run_id == legacy.eval_run_id
+    assert len(latest.results) == 6
+    assert all(result.dataset_id is None for result in latest.results)
+
+
+def test_force_launch_reuses_waiting_run_blocking_same_incident(
+    session_factory: Callable[[], Session],
+) -> None:
+    with session_factory() as session:
+        reseed_database(session)
+        case = session.scalar(select(EvalCase).order_by(EvalCase.id))
+        assert case is not None
+        original, created = create_investigation_run(
+            session,
+            case.incident_id,
+            force=True,
+        )
+        assert created is True
+        run = session.get(AgentRun, original.id)
+        assert run is not None
+        run.status = "waiting_for_approval"
+        session.commit()
+        _invalidate_run_detail_cache(run.id)
+
+        reused, created = create_investigation_run(
+            session,
+            case.incident_id,
+            force=True,
+        )
+
+    assert created is False
+    assert reused.id == original.id
+    assert reused.status == "waiting_for_approval"
 
 
 def test_action_safety_fails_when_expected_actions_are_missing() -> None:

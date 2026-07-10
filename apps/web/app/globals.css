@@ -155,6 +155,14 @@ textarea:focus-visible,
   letter-spacing: 0;
 }
 
+.page-summary {
+  max-width: 68ch;
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
 .eyebrow {
   margin: 0;
   color: var(--muted);
@@ -217,6 +225,16 @@ textarea:focus-visible,
   text-decoration: none;
   white-space: nowrap;
   cursor: pointer;
+  transition: transform 120ms ease, background-color 120ms ease, border-color 120ms ease;
+}
+
+.action-button:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.action-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .secondary-action {
@@ -849,6 +867,308 @@ tbody tr:last-child td {
   margin-bottom: 16px;
 }
 
+.eval-studio-alert {
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.eval-studio-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.28fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+  margin-bottom: 16px;
+}
+
+.eval-loading-grid {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.28fr) minmax(0, 1fr);
+  gap: 16px;
+}
+
+.eval-loading-block {
+  min-height: 220px;
+  background: linear-gradient(90deg, var(--panel) 0%, var(--panel-soft) 50%, var(--panel) 100%);
+  background-size: 200% 100%;
+  animation: eval-loading-shimmer 1.4s ease-in-out infinite;
+}
+
+.eval-loading-tall {
+  min-height: 420px;
+}
+
+@keyframes eval-loading-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+.eval-studio-main {
+  display: grid;
+  gap: 16px;
+}
+
+.eval-dataset-rail {
+  position: sticky;
+  top: 74px;
+  overflow: hidden;
+}
+
+.eval-dataset-list {
+  display: grid;
+}
+
+.eval-dataset-link {
+  display: grid;
+  gap: 5px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  color: var(--foreground);
+  text-decoration: none;
+  transition: background-color 120ms ease, box-shadow 120ms ease;
+}
+
+.eval-dataset-link:last-child {
+  border-bottom: 0;
+}
+
+.eval-dataset-link:hover,
+.eval-dataset-link.selected {
+  background: var(--panel-soft);
+}
+
+.eval-dataset-link.selected {
+  box-shadow: inset 3px 0 0 var(--blue);
+}
+
+.eval-dataset-link strong,
+.eval-dataset-link span,
+.eval-dataset-link small {
+  display: block;
+}
+
+.eval-dataset-link strong {
+  font-size: 14px;
+  line-height: 1.3;
+}
+
+.eval-dataset-link span {
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.eval-dataset-link small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.eval-dataset-detail {
+  overflow: hidden;
+}
+
+.eval-dataset-detail .panel-header > div > span {
+  margin-bottom: 5px;
+}
+
+.eval-dataset-description {
+  margin: 0;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  color: var(--ink-soft);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.eval-case-list {
+  display: grid;
+}
+
+.eval-case-row {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.eval-case-row:last-child {
+  border-bottom: 0;
+}
+
+.eval-case-index {
+  color: var(--muted);
+  font-family: 'SF Mono', Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.eval-case-row h3,
+.eval-control-form h3 {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.eval-case-row p {
+  margin: 4px 0 0;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.eval-case-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 12px 0 0;
+}
+
+.eval-case-meta dt,
+.approval-meta-grid dt {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.eval-case-meta dd,
+.approval-meta-grid dd {
+  margin: 4px 0 0;
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.eval-controls-panel {
+  overflow: hidden;
+}
+
+.eval-control-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  gap: 1px;
+  background: var(--border);
+}
+
+.eval-control-form {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+  padding: 16px;
+  background: var(--panel);
+}
+
+.eval-control-form h3 {
+  grid-column: 1 / -1;
+}
+
+.eval-control-form .field-select {
+  width: 100%;
+  min-width: 0;
+}
+
+.eval-comparison-panel {
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+
+.regression-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #b8e7d5;
+  background: #edfcf5;
+  color: var(--green);
+}
+
+.regression-banner.has-regressions {
+  border-bottom-color: #f2b8b5;
+  background: #fff0ee;
+  color: var(--red);
+}
+
+.regression-banner strong,
+.regression-banner span {
+  display: block;
+}
+
+.regression-banner strong {
+  font-size: 15px;
+  text-transform: uppercase;
+}
+
+.regression-banner span {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.eval-comparison-table td:first-child strong,
+.eval-comparison-table td:first-child small,
+.eval-results-panel td:first-child strong,
+.eval-results-panel td:first-child small {
+  display: block;
+}
+
+.eval-comparison-table td:first-child small,
+.eval-results-panel td:first-child small {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.eval-regression-row td {
+  background: #fff5f3;
+}
+
+.eval-regression-row td:first-child {
+  box-shadow: inset 4px 0 0 var(--red);
+}
+
+.eval-change {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-soft);
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.eval-change-regression {
+  border-color: #f2b8b5;
+  background: #fff0ee;
+  color: var(--red);
+}
+
+.eval-change-improvement {
+  border-color: #b8e7d5;
+  background: #edfcf5;
+  color: var(--green);
+}
+
+.eval-result-failure {
+  color: var(--red) !important;
+  font-weight: 700;
+}
+
 .eval-detail-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -920,6 +1240,43 @@ tbody tr:last-child td {
 
 .approval-panel {
   margin-bottom: 16px;
+}
+
+.approval-filter-panel {
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+
+.approval-filter-panel .panel-header a {
+  color: var(--blue);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.approval-filter-form {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.7fr) minmax(260px, 1.3fr) minmax(150px, 0.7fr) auto;
+  gap: 12px;
+  align-items: end;
+  padding: 16px;
+}
+
+.approval-filter-form .field-select {
+  width: 100%;
+  min-width: 0;
+}
+
+.approval-badges {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.approval-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 14px 0 0;
 }
 
 .approval-stack {
@@ -1429,4 +1786,62 @@ tbody tr:last-child td {
   width: 16px;
   height: 16px;
   flex-shrink: 0;
+}
+
+@media (max-width: 1100px) {
+  .eval-studio-layout,
+  .eval-loading-grid,
+  .eval-control-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .eval-dataset-rail {
+    position: static;
+  }
+
+  .eval-dataset-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .eval-dataset-link:nth-child(odd) {
+    border-right: 1px solid var(--border);
+  }
+
+  .approval-filter-form,
+  .approval-meta-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .eval-dataset-list,
+  .eval-case-meta,
+  .eval-control-form,
+  .approval-filter-form,
+  .approval-meta-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .eval-dataset-link:nth-child(odd) {
+    border-right: 0;
+  }
+
+  .eval-control-form h3 {
+    grid-column: auto;
+  }
+
+  .regression-banner {
+    display: grid;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .action-button,
+  .eval-dataset-link {
+    transition: none;
+  }
+
+  .eval-loading-block {
+    animation: none;
+  }
 }

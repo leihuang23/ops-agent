@@ -247,8 +247,12 @@ class AgentRun(Base):
             "uq_agent_runs_active_incident",
             "incident_id",
             unique=True,
-            sqlite_where=text("status IN ('queued', 'running')"),
-            postgresql_where=text("status IN ('queued', 'running')"),
+            sqlite_where=text(
+                "status IN ('queued', 'running', 'waiting_for_approval')"
+            ),
+            postgresql_where=text(
+                "status IN ('queued', 'running', 'waiting_for_approval')"
+            ),
         ),
     )
 
@@ -468,6 +472,41 @@ class ActionAuditEvent(Base):
     )
 
 
+class EvalDataset(Base):
+    __tablename__ = "eval_datasets"
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False, unique=True, index=True)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    case_links: Mapped[list[EvalDatasetCase]] = relationship(
+        back_populates="dataset",
+        cascade="all, delete-orphan",
+        order_by="EvalDatasetCase.eval_case_id",
+    )
+    results: Mapped[list[EvalResult]] = relationship(back_populates="dataset")
+
+
+class EvalDatasetCase(Base):
+    __tablename__ = "eval_dataset_cases"
+
+    dataset_id: Mapped[str] = mapped_column(
+        String(80),
+        ForeignKey("eval_datasets.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    eval_case_id: Mapped[str] = mapped_column(
+        String(80),
+        ForeignKey("eval_cases.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+
+    dataset: Mapped[EvalDataset] = relationship(back_populates="case_links")
+    eval_case: Mapped[EvalCase] = relationship(back_populates="dataset_links")
+
+
 class EvalCase(Base):
     __tablename__ = "eval_cases"
 
@@ -489,6 +528,9 @@ class EvalCase(Base):
     results: Mapped[list[EvalResult]] = relationship(
         back_populates="eval_case", cascade="all, delete-orphan"
     )
+    dataset_links: Mapped[list[EvalDatasetCase]] = relationship(
+        back_populates="eval_case", cascade="all, delete-orphan"
+    )
 
 
 class EvalResult(Base):
@@ -502,6 +544,12 @@ class EvalResult(Base):
     agent_run_id: Mapped[str] = mapped_column(
         String(48), ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    agent_version_id: Mapped[str | None] = mapped_column(
+        String(128), ForeignKey("agent_versions.id", ondelete="RESTRICT"), index=True
+    )
+    dataset_id: Mapped[str | None] = mapped_column(
+        String(80), ForeignKey("eval_datasets.id", ondelete="SET NULL"), index=True
+    )
     scenario: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     passed: Mapped[bool] = mapped_column(Boolean, nullable=False, index=True)
@@ -509,6 +557,7 @@ class EvalResult(Base):
     citation_quality_score: Mapped[float] = mapped_column(Float, nullable=False)
     action_safety_score: Mapped[float] = mapped_column(Float, nullable=False)
     latency_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    cost_estimate_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     expected_root_cause: Mapped[str] = mapped_column(Text, nullable=False)
     actual_root_cause: Mapped[str | None] = mapped_column(Text)
     expected_evidence_types: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
@@ -521,6 +570,8 @@ class EvalResult(Base):
 
     eval_case: Mapped[EvalCase] = relationship(back_populates="results")
     agent_run: Mapped[AgentRun] = relationship(back_populates="eval_results")
+    agent_version: Mapped[AgentVersion | None] = relationship()
+    dataset: Mapped[EvalDataset | None] = relationship(back_populates="results")
 
 
 class Agent(Base):
@@ -597,6 +648,12 @@ Index("ix_approval_requests_run_status", ApprovalRequest.run_id, ApprovalRequest
 Index("ix_action_audit_events_run_created", ActionAuditEvent.run_id, ActionAuditEvent.created_at)
 Index("ix_eval_results_run_case", EvalResult.eval_run_id, EvalResult.eval_case_id)
 Index("ix_eval_results_case_created", EvalResult.eval_case_id, EvalResult.created_at)
+Index(
+    "ix_eval_results_version_dataset_created",
+    EvalResult.agent_version_id,
+    EvalResult.dataset_id,
+    EvalResult.created_at,
+)
 Index("ix_agent_versions_agent_status", AgentVersion.agent_id, AgentVersion.status)
 Index("ix_agent_runs_version_status", AgentRun.agent_version_id, AgentRun.status)
 Index("ix_agent_runs_version_created", AgentRun.agent_version_id, AgentRun.created_at)
