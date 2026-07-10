@@ -867,12 +867,7 @@ def test_tool_registry_downgrade_fails_closed_when_snapshot_is_referenced(
                 incident_id=None,
                 agent_id="revenue-ops-agent",
                 agent_version_id=(
-                    "revenue-ops-agent_phase6"
-                    if reference_type == "agent_run"
-                    else "revenue-ops-agent_v1"
-                ),
-                status="completed",
-                trace_id=None,
+                status="succeeded",
                 trace_url=None,
                 trace_provider=None,
                 trace_metadata={},
