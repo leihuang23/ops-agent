@@ -89,7 +89,7 @@ export async function approveApprovalFromQueue(formData: FormData) {
     demoOperatorOptions(),
   );
 
-  redirectToApprovals(formData, result.ok ? undefined : result.error);
+  redirectToApprovals(formData, result.ok ? undefined : result.error, result.ok);
 }
 
 export async function rejectApprovalFromQueue(formData: FormData) {
@@ -101,7 +101,7 @@ export async function rejectApprovalFromQueue(formData: FormData) {
     demoOperatorOptions(),
   );
 
-  redirectToApprovals(formData, result.ok ? undefined : result.error);
+  redirectToApprovals(formData, result.ok ? undefined : result.error, result.ok);
 }
 
 export async function runEvalDatasetFromStudio(formData: FormData) {
@@ -299,12 +299,18 @@ function readRunSurface(formData: FormData): 'agent' | 'control-plane' {
   return formData.get('surface') === 'control-plane' ? 'control-plane' : 'agent';
 }
 
-function redirectToApprovals(formData: FormData, error?: string) {
+function redirectToApprovals(formData: FormData, error?: string, showDecision = false) {
   const params = new URLSearchParams();
   copySafeQueryValue(formData, params, 'status');
   copySafeQueryValue(formData, params, 'agent_version_id');
   copySafeQueryValue(formData, params, 'risk_level');
   copySafeQueryValue(formData, params, 'include_decided');
+  // The default queue intentionally hides decided requests, but immediately
+  // after a successful decision the operator needs confirmation that it took
+  // effect. Preserve filters and opt into history for this redirect only.
+  if (showDecision) {
+    params.set('include_decided', 'true');
+  }
   if (error) {
     params.set('approval_error', error);
   }
