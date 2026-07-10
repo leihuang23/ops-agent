@@ -20,7 +20,6 @@ import {
 } from '@/lib/api';
 import {
   formatCount,
-  formatDateTime,
   formatPercent,
   formatScenario,
   formatUsd,
