@@ -179,4 +179,5 @@ test('approval queue filters by version and risk and preserves filters through d
   assert.match(pageSource, /ApprovalDecisionFields/);
   assert.match(actionSource, /copySafeQueryValue\(formData, params, 'agent_version_id'\)/);
   assert.match(actionSource, /copySafeQueryValue\(formData, params, 'risk_level'\)/);
+  assert.match(actionSource, /params\.set\('include_decided', 'true'\)/);
 });
