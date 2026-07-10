@@ -349,7 +349,7 @@ class ModelUsage(Base):
     ``synthesize report`` step) carries the back-reference
     ``AgentRunStep.model_usage_id``; ``step_id`` here is the enforced FK so the
     row is removed with its step. Cost is always an *estimate*
-    (``estimate_cost_usd``), never an actual charge.
+    (``cost_estimate_usd``), never an actual charge.
     """
 
     __tablename__ = "model_usage"
