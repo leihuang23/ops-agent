@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Agent, AgentRun, AgentVersion
 
-from .schemas import AgentVersionObservability
+from .schemas import AgentObservabilitySummary, AgentVersionObservability
 
 
 def _p95_nearest_rank(values: list[int]) -> float | None:
@@ -161,3 +161,74 @@ def get_agent_version_dashboard(
         )
         for row in rows
     ]
+
+
+def get_agent_dashboard(session: Session) -> list[AgentObservabilitySummary]:
+    """Per-agent rollup across all versions (PRD §10: per-agent summary).
+
+    Collapses every version's runs into one summary row per agent. Agents with
+    no runs are not included (the dashboard is a run-driven aggregate). The
+    per-version breakdown is available via ``get_agent_version_dashboard``.
+    """
+    version_rows = _version_aggregate_rows(session, agent_id_filter=None)
+    latencies_by_version = _latencies_by_version(session, agent_id_filter=None)
+
+    # Group per-version rows by agent_id, preserving the first-seen agent_name.
+    agents: dict[str, dict[str, object]] = {}
+    for row in version_rows:
+        agent_bucket = agents.setdefault(
+            row.agent_id,
+            {
+                "agent_id": row.agent_id,
+                "agent_name": row.agent_name,
+                "version_ids": set(),
+                "total_runs": 0,
+                "successful_runs": 0,
+                "total_cost": 0.0,
+                "latencies": [],
+                "last_run_at": None,
+            },
+        )
+        agent_bucket["version_ids"].add(row.agent_version_id)
+        agent_bucket["total_runs"] += int(row.total_runs or 0)
+        agent_bucket["successful_runs"] += int(row.successful_runs or 0)
+        agent_bucket["total_cost"] += float(row.total_cost or 0.0)
+        agent_bucket["latencies"].extend(
+            latencies_by_version.get(row.agent_version_id, [])
+        )
+        row_last = row.last_run_at
+        if row_last is not None:
+            current_last = agent_bucket["last_run_at"]
+            if current_last is None or row_last > current_last:
+                agent_bucket["last_run_at"] = row_last
+
+    summaries: list[AgentObservabilitySummary] = []
+    for agent_data in agents.values():
+        total_runs = int(agent_data["total_runs"])
+        successful_runs = int(agent_data["successful_runs"])
+        total_cost = float(agent_data["total_cost"])
+        all_latencies: list[int] = agent_data["latencies"]  # type: ignore[assignment]
+        success_rate = round(successful_runs / total_runs, 4) if total_runs else 0.0
+        avg_cost = round(total_cost / total_runs, 4) if total_runs else 0.0
+        avg_latency = (
+            round(sum(all_latencies) / len(all_latencies), 2)
+            if all_latencies
+            else None
+        )
+        summaries.append(
+            AgentObservabilitySummary(
+                agent_id=agent_data["agent_id"],  # type: ignore[arg-type]
+                agent_name=agent_data["agent_name"],  # type: ignore[arg-type]
+                version_count=len(agent_data["version_ids"]),  # type: ignore[arg-type]
+                total_runs=total_runs,
+                successful_runs=successful_runs,
+                success_rate=success_rate,
+                avg_latency_ms=avg_latency,
+                p95_latency_ms=_p95_nearest_rank(all_latencies),
+                avg_cost_estimate_usd=avg_cost,
+                total_cost_estimate_usd=round(total_cost, 4),
+                last_run_at=agent_data["last_run_at"],  # type: ignore[arg-type]
+            )
+        )
+    summaries.sort(key=lambda s: (s.agent_name, s.agent_id))
+    return summaries

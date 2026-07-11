@@ -5,11 +5,14 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-from app.core.access import require_demo_data_access, require_demo_operator_access
+from app.core.access import (
+    require_demo_data_access,
+    require_demo_operator_access,
+    require_operator_or_eval_run_access,
+)
 from app.core.config import get_settings
 from app.core.limiter import limiter
 from app.db.session import get_db
-from app.evals.router import require_eval_run_access
 from app.evals.schemas import (
     EvalDatasetCreate,
     EvalDatasetDetail,
@@ -90,10 +93,7 @@ def get_dataset(
     "/eval-datasets/{dataset_id}/run",
     response_model=EvalDatasetRunAccepted,
     status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[
-        Depends(require_demo_operator_access),
-        Depends(require_eval_run_access),
-    ],
+    dependencies=[Depends(require_operator_or_eval_run_access)],
 )
 @limiter.limit(f"{_settings.rate_limit_mutations_per_minute}/minute")
 def run_dataset(

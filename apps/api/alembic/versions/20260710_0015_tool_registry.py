@@ -229,13 +229,43 @@ def _release_owned_snapshot_ids(
     )
 
 
-def _assert_snapshots_unreferenced(
+def _reassign_snapshot_references(
     conn: sa.engine.Connection,
     agent_versions: sa.TableClause,
     owned_ids: tuple[str, ...],
 ) -> None:
+    """Reassign FK references from release-owned Phase 6 snapshots back to the
+    immutable v1 source so the snapshots can be safely deleted on downgrade.
+
+    The v1 snapshot (``PHASE6_SOURCE_VERSION_ID``) is the ultimate ancestor of
+    every Phase 6 variant (phase6 forks from v1; phase6_degraded forks from
+    phase6). Reassigning runs, eval results, and fork links to v1 preserves FK
+    integrity and keeps the historical rows reachable. The semantic loss — a run
+    no longer points at the exact version that produced it — is the expected
+    cost of a downgrade and is why the migration is documented as lossy for
+    referenced snapshots.
+
+    If v1 does not exist (extreme edge case: operator manually deleted it), we
+    cannot safely reassign and must fail rather than orphan the FKs.
+    """
     if not owned_ids:
         return
+
+    source_exists = conn.execute(
+        sa.select(sa.literal(1))
+        .select_from(agent_versions)
+        .where(
+            agent_versions.c.id == PHASE6_SOURCE_VERSION_ID,
+            agent_versions.c.status == "published",
+        )
+        .limit(1)
+    ).first()
+    if source_exists is None:
+        raise RuntimeError(
+            "Cannot downgrade 20260710_0015: the source version "
+            f"{PHASE6_SOURCE_VERSION_ID!r} does not exist, so Phase 6 "
+            "snapshot references cannot be safely reassigned."
+        )
 
     agent_runs = sa.table(
         "agent_runs",
@@ -245,33 +275,27 @@ def _assert_snapshots_unreferenced(
         "eval_results",
         sa.column("agent_version_id", sa.String(128)),
     )
-    reference_queries = {
-        "agent_runs": sa.select(sa.literal(1))
-        .select_from(agent_runs)
+    conn.execute(
+        agent_runs.update()
         .where(agent_runs.c.agent_version_id.in_(owned_ids))
-        .limit(1),
-        "eval_results": sa.select(sa.literal(1))
-        .select_from(eval_results)
+        .values(agent_version_id=PHASE6_SOURCE_VERSION_ID)
+    )
+    conn.execute(
+        eval_results.update()
         .where(eval_results.c.agent_version_id.in_(owned_ids))
-        .limit(1),
-        "agent_versions": sa.select(sa.literal(1))
-        .select_from(agent_versions)
+        .values(agent_version_id=PHASE6_SOURCE_VERSION_ID)
+    )
+    # Reassign fork links (excluding the owned snapshots themselves, which are
+    # about to be deleted). On PostgreSQL the FK ondelete=SET NULL would handle
+    # this, but SQLite does not enforce ondelete by default, so do it explicitly.
+    conn.execute(
+        agent_versions.update()
         .where(
             agent_versions.c.forked_from_version_id.in_(owned_ids),
             ~agent_versions.c.id.in_(owned_ids),
         )
-        .limit(1),
-    }
-    referenced_by = [
-        table_name
-        for table_name, query in reference_queries.items()
-        if conn.execute(query).first() is not None
-    ]
-    if referenced_by:
-        raise RuntimeError(
-            "Cannot downgrade 20260710_0015: release-owned Phase 6 snapshots "
-            f"are referenced by {', '.join(referenced_by)}."
-        )
+        .values(forked_from_version_id=PHASE6_SOURCE_VERSION_ID)
+    )
 
 
 def downgrade() -> None:
@@ -280,10 +304,11 @@ def downgrade() -> None:
         "agent_versions",
         sa.column("id", sa.String(128)),
         sa.column("published_by", sa.String(80)),
+        sa.column("status", sa.String(32)),
         sa.column("forked_from_version_id", sa.String(128)),
     )
     owned_ids = _release_owned_snapshot_ids(conn, agent_versions)
-    _assert_snapshots_unreferenced(conn, agent_versions, owned_ids)
+    _reassign_snapshot_references(conn, agent_versions, owned_ids)
     for version_id in (PHASE6_DEGRADED_VERSION_ID, PHASE6_VERSION_ID):
         if version_id in owned_ids:
             conn.execute(

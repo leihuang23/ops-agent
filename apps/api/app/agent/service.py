@@ -284,6 +284,49 @@ def _fail_running_run(
     return get_run_detail(session, run_id)
 
 
+def _fail_unclaimable_run(
+    session: Session,
+    run: AgentRun,
+    trace,
+    *,
+    db_error: str,
+    trace_error: str,
+    log_message: str,
+    log_extra: dict[str, object],
+) -> AgentRunDetail:
+    """Mark a ``running`` run ``failed`` when it cannot proceed (no usable agent
+    version). Used both when the recorded version is missing and when it is not
+    published (FR-3 defense-in-depth: the runtime never reads draft fields).
+
+    The conditional ``UPDATE ... WHERE status='running'`` avoids clobbering a
+    run that already transitioned out of ``running`` (e.g. a concurrent
+    force-fail); on rowcount 0 we finish the trace from the current state
+    instead of forcing a write.
+    """
+    now = utcnow_naive()
+    claim = session.execute(
+        update(AgentRun)
+        .where(AgentRun.id == run.id, AgentRun.status == "running")
+        .values(
+            status="failed",
+            error=db_error,
+            completed_at=now,
+            updated_at=now,
+        )
+    )
+    if claim.rowcount != 1:
+        session.rollback()
+        _invalidate_run_detail_cache(run.id)
+        current = get_run_detail(session, run.id)
+        _finish_trace(trace, outputs=current.final_report, error=current.error)
+        return current
+    session.commit()
+    _invalidate_run_detail_cache(run.id)
+    _finish_trace(trace, error=trace_error)
+    logger.error(log_message, extra={"run_id": run.id, **log_extra})
+    return get_run_detail(session, run.id)
+
+
 def execute_investigation_run_with_session(
     session: Session, run_id: str
 ) -> AgentRunDetail:
@@ -384,44 +427,23 @@ def execute_investigation_run_with_session(
         from app.agents.service import get_default_published_version
         fallback = get_default_published_version(session)
         if fallback is None:
-            trace_error = (
-                f"Agent version {run.agent_version_id!r} not found and no default "
-                "published version is available; cannot start investigation."
+            return _fail_unclaimable_run(
+                session,
+                run,
+                trace,
+                db_error=(
+                    f"Agent version {run.agent_version_id!r} not found and no "
+                    "default published version is available. Seed the database "
+                    "or create a default agent before running investigations."
+                ),
+                trace_error=(
+                    f"Agent version {run.agent_version_id!r} not found and no "
+                    "default published version is available; cannot start "
+                    "investigation."
+                ),
+                log_message="Cannot start investigation: no agent version available",
+                log_extra={"requested_version_id": run.agent_version_id},
             )
-            db_error = (
-                f"Agent version {run.agent_version_id!r} not found and no default "
-                "published version is available. Seed the database or create a "
-                "default agent before running investigations."
-            )
-            now = utcnow_naive()
-            claim = session.execute(
-                update(AgentRun)
-                .where(AgentRun.id == run.id, AgentRun.status == "running")
-                .values(
-                    status="failed",
-                    error=db_error,
-                    completed_at=now,
-                    updated_at=now,
-                )
-            )
-            if claim.rowcount != 1:
-                session.rollback()
-                _invalidate_run_detail_cache(run.id)
-                current = get_run_detail(session, run.id)
-                _finish_trace(
-                    trace,
-                    outputs=current.final_report,
-                    error=current.error,
-                )
-                return current
-            session.commit()
-            _invalidate_run_detail_cache(run.id)
-            _finish_trace(trace, error=trace_error)
-            logger.error(
-                "Cannot start investigation: no agent version available",
-                extra={"run_id": run.id, "requested_version_id": run.agent_version_id},
-            )
-            return get_run_detail(session, run.id)
         llm_client = build_llm_client_for_version(fallback)
         resolved_version = fallback
         requested_version_id = run.agent_version_id
@@ -458,6 +480,32 @@ def execute_investigation_run_with_session(
                 },
             }
         session.flush()
+    elif agent_version.status != "published":
+        # PRD FR-3 defense-in-depth: the runtime must never read draft
+        # configuration. Run creation gates drafts out via
+        # ``get_published_version``, but re-assert here so a future code path
+        # or direct DB edit cannot execute an unpublished snapshot. Fail hard
+        # (do not silently fall back) so the invariant violation is visible.
+        return _fail_unclaimable_run(
+            session,
+            run,
+            trace,
+            db_error=(
+                f"Agent version {run.agent_version_id!r} is not published "
+                f"(status={agent_version.status!r}); runtime cannot execute "
+                "draft configuration (PRD FR-3)."
+            ),
+            trace_error=(
+                f"Agent version {run.agent_version_id!r} is not published "
+                f"(status={agent_version.status!r}); refusing to execute draft "
+                "configuration (FR-3)."
+            ),
+            log_message="Cannot start investigation: agent version is not published",
+            log_extra={
+                "requested_version_id": run.agent_version_id,
+                "version_status": agent_version.status,
+            },
+        )
     else:
         llm_client = build_llm_client_for_version(agent_version)
         resolved_version = agent_version
@@ -796,10 +844,34 @@ def _can_propose_report_action(
     return True, None
 
 
+def _trace_metadata_str(metadata: dict[str, Any] | None, key: str) -> str | None:
+    """Extract a string value from ``trace_metadata`` (e.g. ``llm_model``,
+    ``llm_provider``). Returns ``None`` when absent or not a string."""
+    if not metadata:
+        return None
+    value = metadata.get(key)
+    return value if isinstance(value, str) else None
+
+
 def list_agent_runs(session: Session, *, limit: int = 100) -> list[AgentRunSummary]:
     runs = session.scalars(
         select(AgentRun).order_by(AgentRun.created_at.desc()).limit(limit)
     ).all()
+
+    # Batch-query blocked step counts for all runs (avoids N+1 per run).
+    run_ids = [run.id for run in runs]
+    blocked_counts: dict[str, int] = {}
+    if run_ids:
+        blocked_rows = session.execute(
+            select(AgentRunStep.run_id, func.count())
+            .where(
+                AgentRunStep.run_id.in_(run_ids),
+                AgentRunStep.status == "blocked",
+            )
+            .group_by(AgentRunStep.run_id)
+        ).all()
+        blocked_counts = {row[0]: int(row[1]) for row in blocked_rows}
+
     return [
         AgentRunSummary(
             id=run.id,
@@ -810,10 +882,13 @@ def list_agent_runs(session: Session, *, limit: int = 100) -> list[AgentRunSumma
             trace_id=run.trace_id,
             trace_url=run.trace_url,
             trace_provider=run.trace_provider,
+            model=_trace_metadata_str(run.trace_metadata, "llm_model"),
+            provider=_trace_metadata_str(run.trace_metadata, "llm_provider"),
             token_estimate=run.token_estimate,
             prompt_tokens=run.prompt_tokens,
             completion_tokens=run.completion_tokens,
             cost_estimate_usd=run.cost_estimate_usd,
+            blocked_step_count=blocked_counts.get(run.id, 0),
             error=run.error,
             started_at=run.started_at,
             completed_at=run.completed_at,
@@ -943,10 +1018,14 @@ def get_run_detail(session: Session, run_id: str) -> AgentRunDetail:
         trace_url=run.trace_url,
         trace_provider=run.trace_provider,
         trace_metadata=run.trace_metadata,
+        model=_trace_metadata_str(run.trace_metadata, "llm_model")
+        or (agent_version.model if agent_version is not None else None),
+        provider=_trace_metadata_str(run.trace_metadata, "llm_provider"),
         token_estimate=run.token_estimate,
         prompt_tokens=run.prompt_tokens,
         completion_tokens=run.completion_tokens,
         cost_estimate_usd=run.cost_estimate_usd,
+        blocked_step_count=sum(1 for step in steps if step.status == "blocked"),
         input_payload=run.input_payload,
         final_report=InvestigationReport.model_validate(run.final_report)
         if run.final_report is not None

@@ -473,10 +473,13 @@ export type AgentRunSummary = {
   trace_id: string | null;
   trace_url: string | null;
   trace_provider: 'langfuse' | 'langsmith' | 'local' | null;
+  model: string | null;
+  provider: string | null;
   token_estimate: number;
   prompt_tokens: number;
   completion_tokens: number;
   cost_estimate_usd: number;
+  blocked_step_count: number;
   error: string | null;
   started_at: string | null;
   completed_at: string | null;
@@ -508,10 +511,13 @@ export type AgentRunDetail = {
   trace_url: string | null;
   trace_provider: 'langfuse' | 'langsmith' | 'local' | null;
   trace_metadata: Record<string, unknown>;
+  model: string | null;
+  provider: string | null;
   token_estimate: number;
   prompt_tokens: number;
   completion_tokens: number;
   cost_estimate_usd: number;
+  blocked_step_count: number;
   input_payload: Record<string, unknown>;
   final_report: InvestigationReport | null;
   error: string | null;
@@ -551,8 +557,28 @@ export type AgentVersionObservability = {
   last_run_at: string | null;
 };
 
+// Per-agent rollup collapsing all versions into one summary row
+// (PRD §10: GET /dashboard/agents — per-agent summary).
+export type AgentObservabilitySummary = {
+  agent_id: string;
+  agent_name: string;
+  version_count: number;
+  total_runs: number;
+  successful_runs: number;
+  success_rate: number;
+  avg_latency_ms: number | null;
+  p95_latency_ms: number | null;
+  avg_cost_estimate_usd: number;
+  total_cost_estimate_usd: number;
+  last_run_at: string | null;
+};
+
 export type DashboardListResult =
   | { ok: true; data: AgentVersionObservability[] }
+  | { ok: false; error: string };
+
+export type AgentDashboardResult =
+  | { ok: true; data: AgentObservabilitySummary[] }
   | { ok: false; error: string };
 
 export type EvalStatus = 'passed' | 'failed' | 'running';
@@ -805,6 +831,8 @@ export type RegisteredTool = {
   output_schema: Record<string, unknown>;
   permission_scope: ToolPermissionScope;
   implementation_ref: string;
+  created_at: string;
+  updated_at: string;
 };
 
 export type ToolList = {
@@ -1205,7 +1233,7 @@ export async function listRuns(
   }
 }
 
-export async function getDashboardAgents(): Promise<DashboardListResult> {
+export async function getDashboardAgents(): Promise<AgentDashboardResult> {
   try {
     const response = await fetch(`${resolveApiBaseUrl()}/dashboard/agents`, {
       cache: 'no-store',
@@ -1223,7 +1251,7 @@ export async function getDashboardAgents(): Promise<DashboardListResult> {
 
     return {
       ok: true,
-      data: (await response.json()) as AgentVersionObservability[],
+      data: (await response.json()) as AgentObservabilitySummary[],
     };
   } catch (error) {
     return {

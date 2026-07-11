@@ -3,8 +3,9 @@ import { notFound } from 'next/navigation';
 
 import { saveAgentVersionDraft } from '@/app/actions';
 import { ReadOnlyOperatorNotice } from '@/app/ReadOnlyOperatorNotice';
-import { getAgent } from '@/lib/api';
-import { formatDateTime } from '@/lib/format';
+import { getAgent, getDashboardAgent } from '@/lib/api';
+import type { AgentVersionObservability } from '@/lib/api';
+import { formatCount, formatDateTime, formatPercent, formatUsd } from '@/lib/format';
 import { operatorMutationsEnabled } from '@/lib/operatorMutations';
 
 export const dynamic = 'force-dynamic';
@@ -46,6 +47,7 @@ export default async function AgentDetailPage({
   const agent = result.data;
   const publishedVersions = agent.versions.filter((v) => v.status === 'published');
   const draftVersions = agent.versions.filter((v) => v.status === 'draft');
+  const observability = await getDashboardAgent(agent.id);
 
   return (
     <main className="dashboard-shell">
@@ -177,6 +179,70 @@ export default async function AgentDetailPage({
           )}
         </section>
       </section>
+
+      {observability.ok && observability.data.length > 0 ? (
+        <VersionObservabilitySection versions={observability.data} />
+      ) : null}
     </main>
   );
+}
+
+function VersionObservabilitySection({
+  versions,
+}: {
+  versions: AgentVersionObservability[];
+}) {
+  return (
+    <section id="observability" className="panel table-panel" style={{ marginTop: '16px' }}>
+      <div className="panel-header">
+        <h2>Per-version observability</h2>
+        <span>{formatCount(versions.length)} versions with runs</span>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Version</th>
+              <th>Model</th>
+              <th>Runs</th>
+              <th>Success rate</th>
+              <th>Avg latency</th>
+              <th>p95 latency</th>
+              <th>Avg cost (est.)</th>
+              <th>Total cost (est.)</th>
+              <th>Last run</th>
+            </tr>
+          </thead>
+          <tbody>
+            {versions.map((entry) => (
+              <tr key={entry.agent_version_id}>
+                <td>
+                  <Link href={`/agents/${entry.agent_id}/versions/${entry.agent_version_id}`}>
+                    {entry.semantic_version ? `v${entry.semantic_version}` : '—'}
+                  </Link>
+                </td>
+                <td>
+                  <code>{entry.model}</code>
+                </td>
+                <td>{formatCount(entry.total_runs)}</td>
+                <td>{formatPercent(entry.success_rate * 100)}</td>
+                <td>{formatLatency(entry.avg_latency_ms)}</td>
+                <td>{formatLatency(entry.p95_latency_ms)}</td>
+                <td>{formatUsd(entry.avg_cost_estimate_usd)}</td>
+                <td>{formatUsd(entry.total_cost_estimate_usd)}</td>
+                <td>
+                  {entry.last_run_at ? formatDateTime(entry.last_run_at) : '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function formatLatency(value: number | null): string {
+  if (value === null) return '—';
+  return `${formatCount(Math.round(value))} ms`;
 }

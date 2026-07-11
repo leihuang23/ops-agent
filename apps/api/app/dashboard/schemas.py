@@ -31,3 +31,25 @@ class AgentVersionObservability(BaseModel):
     avg_cost_estimate_usd: float
     total_cost_estimate_usd: float
     last_run_at: datetime | None
+
+
+class AgentObservabilitySummary(BaseModel):
+    """Per-agent rollup collapsing all versions into one summary row
+    (PRD §10: ``GET /dashboard/agents`` — per-agent summary).
+
+    Cost fields are always *estimates*. Latency aggregates are computed across
+    every run of every version for the agent; ``None`` when the agent has no
+    completed runs.
+    """
+
+    agent_id: str
+    agent_name: str
+    version_count: int
+    total_runs: int
+    successful_runs: int
+    success_rate: float
+    avg_latency_ms: float | None
+    p95_latency_ms: float | None
+    avg_cost_estimate_usd: float
+    total_cost_estimate_usd: float
+    last_run_at: datetime | None

@@ -152,12 +152,15 @@ def test_dashboard_aggregates_match_seeded_runs(
     assert entry["model"]
 
 
-def test_dashboard_lists_every_version_with_runs(
+def test_dashboard_lists_every_agent_with_runs(
     session_factory: Callable[[], Session],
 ) -> None:
-    """``GET /dashboard/agents`` returns one entry per agent version that has
-    at least one run (run-driven aggregates). After seeding there are no runs,
-    so the list is empty; once runs exist the default version appears."""
+    """``GET /dashboard/agents`` returns one per-agent summary row per agent
+    that has at least one run (run-driven aggregates, PRD §10: per-agent
+    summary). After seeding there are no runs, so the list is empty; once runs
+    exist the default agent appears as a single rollup row collapsing all its
+    versions. Use ``GET /dashboard/agents/{agent_id}`` for the per-version
+    breakdown."""
     _seed(session_factory)
     client = _client_with_db(session_factory)
 
@@ -172,7 +175,14 @@ def test_dashboard_lists_every_version_with_runs(
     assert populated.status_code == 200
     entries = populated.json()
     assert len(entries) == 1
-    assert entries[0]["agent_version_id"] == DEFAULT_AGENT_VERSION_ID
+    entry = entries[0]
+    assert entry["agent_id"] == DEFAULT_AGENT_ID
+    assert entry["agent_name"]
+    assert entry["version_count"] == 1
+    assert entry["total_runs"] == 1
+    assert entry["successful_runs"] == 1
+    assert entry["success_rate"] == 1.0
+    assert entry["last_run_at"] is not None
 
 
 def test_dashboard_excludes_non_terminal_runs_from_latency(

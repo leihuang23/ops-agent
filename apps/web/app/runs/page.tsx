@@ -98,7 +98,7 @@ export default async function RunsPage({ searchParams }: RunsPageProps) {
                   <th>Started</th>
                   <th>Completed</th>
                   <th>Tokens</th>
-                  <th>Cost</th>
+                  <th>Estimated cost</th>
                   <th>Trace</th>
                 </tr>
               </thead>

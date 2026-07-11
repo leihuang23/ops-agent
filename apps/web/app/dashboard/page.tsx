@@ -1,7 +1,7 @@
 import Link from 'next/link';
 
 import { getDashboardAgents } from '@/lib/api';
-import type { AgentVersionObservability } from '@/lib/api';
+import type { AgentObservabilitySummary } from '@/lib/api';
 import { formatCount, formatDateTime, formatPercent, formatUsd } from '@/lib/format';
 
 export const dynamic = 'force-dynamic';
@@ -32,39 +32,40 @@ export default async function ObservabilityDashboardPage() {
         <section className="empty-state">
           <h2>No runs yet</h2>
           <p>
-            Per-version aggregates appear here once an investigation run is
+            Per-agent summaries appear here once an investigation run is
             recorded. Launch a run from an incident or the run timeline.
           </p>
         </section>
       ) : (
-        <VersionAggregateTable versions={result.data} />
+        <AgentSummaryTable agents={result.data} />
       )}
 
       <p className="footnote">
         Cost values are estimates derived from token usage and never imply
         billing precision (PRD AC-6.4). p95 latency uses the nearest-rank method
-        over <code>completed_at - started_at</code> per run (PRD FR-19).
+        over <code>completed_at - started_at</code> per run (PRD FR-19). Click an
+        agent for the per-version breakdown (PRD §10).
       </p>
     </main>
   );
 }
 
-function VersionAggregateTable({
-  versions,
+function AgentSummaryTable({
+  agents,
 }: {
-  versions: AgentVersionObservability[];
+  agents: AgentObservabilitySummary[];
 }) {
-  const totalRuns = versions.reduce((sum, v) => sum + v.total_runs, 0);
-  const totalCost = versions.reduce((sum, v) => sum + v.total_cost_estimate_usd, 0);
-  const totalSucceeded = versions.reduce((sum, v) => sum + v.successful_runs, 0);
+  const totalRuns = agents.reduce((sum, a) => sum + a.total_runs, 0);
+  const totalCost = agents.reduce((sum, a) => sum + a.total_cost_estimate_usd, 0);
+  const totalSucceeded = agents.reduce((sum, a) => sum + a.successful_runs, 0);
   const overallSuccessRate = totalRuns > 0 ? (totalSucceeded / totalRuns) * 100 : 0;
 
   return (
     <>
       <section className="snapshot-bar">
         <div>
-          <span className="label">Versions</span>
-          <strong>{formatCount(versions.length)}</strong>
+          <span className="label">Agents</span>
+          <strong>{formatCount(agents.length)}</strong>
         </div>
         <div>
           <span className="label">Total runs</span>
@@ -82,15 +83,15 @@ function VersionAggregateTable({
 
       <section className="panel table-panel">
         <div className="panel-header">
-          <h2>Per-agent-version aggregates</h2>
-          <span>{formatCount(versions.length)} versions</span>
+          <h2>Per-agent summaries</h2>
+          <span>{formatCount(agents.length)} agents</span>
         </div>
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Agent / version</th>
-                <th>Model</th>
+                <th>Agent</th>
+                <th>Versions</th>
                 <th>Runs</th>
                 <th>Success rate</th>
                 <th>Avg latency</th>
@@ -102,22 +103,12 @@ function VersionAggregateTable({
               </tr>
             </thead>
             <tbody>
-              {versions.map((entry) => (
-                <tr key={entry.agent_version_id}>
+              {agents.map((entry) => (
+                <tr key={entry.agent_id}>
                   <td>
-                    <div className="cell-stack">
-                      <Link href={`/agents/${entry.agent_id}`}>{entry.agent_name}</Link>
-                      <Link
-                        className="muted"
-                        href={`/agents/${entry.agent_id}/versions/${entry.agent_version_id}`}
-                      >
-                        {entry.semantic_version ? `v${entry.semantic_version}` : '—'}
-                      </Link>
-                    </div>
+                    <Link href={`/agents/${entry.agent_id}`}>{entry.agent_name}</Link>
                   </td>
-                  <td>
-                    <code>{entry.model}</code>
-                  </td>
+                  <td>{formatCount(entry.version_count)}</td>
                   <td>{formatCount(entry.total_runs)}</td>
                   <td>{formatPercent(entry.success_rate * 100)}</td>
                   <td>{formatLatency(entry.avg_latency_ms)}</td>
@@ -130,9 +121,9 @@ function VersionAggregateTable({
                   <td>
                     <Link
                       className="action-button secondary-action"
-                      href={`/runs?agent_version_id=${encodeURIComponent(entry.agent_version_id)}`}
+                      href={`/agents/${entry.agent_id}#observability`}
                     >
-                      Runs
+                      Versions
                     </Link>
                   </td>
                 </tr>

@@ -14,7 +14,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -22,6 +22,7 @@ from app.agent.persistence import utcnow_naive
 from app.agent.schemas import AgentRunDetail, AgentRunSummary
 from app.agent.tracing import queued_run_trace
 from app.agent.service import (
+    _trace_metadata_str,
     abandon_orphaned_runs_for_incident,
     get_run_detail,
     invalidate_run_detail_cache,
@@ -82,6 +83,21 @@ def list_runs(
     if status is not None:
         stmt = stmt.where(AgentRun.status == status)
     runs = session.scalars(stmt).all()
+
+    # Batch-query blocked step counts for all runs (avoids N+1 per run).
+    run_ids = [run.id for run in runs]
+    blocked_counts: dict[str, int] = {}
+    if run_ids:
+        blocked_rows = session.execute(
+            select(AgentRunStep.run_id, func.count())
+            .where(
+                AgentRunStep.run_id.in_(run_ids),
+                AgentRunStep.status == "blocked",
+            )
+            .group_by(AgentRunStep.run_id)
+        ).all()
+        blocked_counts = {row[0]: int(row[1]) for row in blocked_rows}
+
     return [
         AgentRunSummary(
             id=run.id,
@@ -92,10 +108,13 @@ def list_runs(
             trace_id=run.trace_id,
             trace_url=run.trace_url,
             trace_provider=run.trace_provider,
+            model=_trace_metadata_str(run.trace_metadata, "llm_model"),
+            provider=_trace_metadata_str(run.trace_metadata, "llm_provider"),
             token_estimate=run.token_estimate,
             prompt_tokens=run.prompt_tokens,
             completion_tokens=run.completion_tokens,
             cost_estimate_usd=run.cost_estimate_usd,
+            blocked_step_count=blocked_counts.get(run.id, 0),
             error=run.error,
             started_at=run.started_at,
             completed_at=run.completed_at,
