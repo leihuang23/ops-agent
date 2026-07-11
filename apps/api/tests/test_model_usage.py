@@ -39,7 +39,7 @@ class _FakeLLMClient:
     never produces)."""
 
     provider: str = "fake"
-    model: str = "fake-model"
+    model: str = "gpt-4o-mini"
 
     def __init__(self, response: LLMResponse) -> None:
         self._response = response
@@ -283,10 +283,10 @@ def test_run_with_real_llm_writes_used_llm_model_usage_row(
 
         # Real-LLM path: provider/model come from the client.
         assert usage.provider == "fake"
-        assert usage.model == "fake-model"
+        assert usage.model == "gpt-4o-mini"
 
-        # used_llm=True -> positive estimated cost (unknown model falls back
-        # to DEFAULT_PRICING in llm/pricing.py) and NO fallback reason (the
+        # used_llm=True -> positive estimated cost (the fake client reports a
+        # known model so pricing resolves) and NO fallback reason (the
         # LLM answer was accepted, so no deterministic fallback was taken).
         assert usage.used_llm is True
         assert usage.fallback_reason is None

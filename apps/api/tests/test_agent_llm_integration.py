@@ -22,7 +22,7 @@ from app.seed import reseed_database
 
 class FakeLLMClient:
     provider: str = "fake"
-    model: str = "fake-model"
+    model: str = "gpt-4o-mini"
 
     def __init__(self, response: LLMResponse) -> None:
         self.response = response

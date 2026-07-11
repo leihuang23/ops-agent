@@ -181,3 +181,44 @@ test('approval queue filters by version and risk and preserves filters through d
   assert.match(actionSource, /copySafeQueryValue\(formData, params, 'risk_level'\)/);
   assert.match(actionSource, /params\.set\('include_decided', 'true'\)/);
 });
+
+test('agents page exposes a register-new-agent form gated by operator mutations (AC-1.1)', () => {
+  const pageSource = readWorkspaceFile('app/agents/page.tsx');
+  const actionSource = readWorkspaceFile('app/actions.ts');
+
+  // AC-1.1: create-agent form is rendered on the agents listing page.
+  // FR-1: POST /agents creates an agent (name, description, default model).
+  assert.match(pageSource, /Register a new agent/);
+  assert.match(pageSource, /createAgentAction/);
+  // Required slug id must conform to AGENT_SLUG_PATTERN (kebab-case).
+  assert.match(pageSource, /name="id"/);
+  assert.match(pageSource, /pattern=/);
+  // Form fields required by AgentCreate schema + AC-1.1.
+  assert.match(pageSource, /name="name"/);
+  assert.match(pageSource, /name="description"/);
+  assert.match(pageSource, /name="default_model"/);
+  // Form is disabled when mutations are not enabled (read-only demo).
+  const createForm = pageSource.match(/<form action=\{createAgentAction\}[\s\S]*?<\/form>/)?.[0];
+  assert.ok(createForm, 'agents page must render a createAgentAction form');
+  assert.match(createForm, /disabled=\{!mutationsEnabled/);
+
+  // Server action exists, requires operator mutations, and posts to /agents.
+  assert.match(actionSource, /export async function createAgentAction/);
+  assert.match(actionSource, /requireOperatorMutationsEnabled\(\);/);
+});
+
+test('launch-run form exposes an optional input_payload JSON editor (FR-8)', () => {
+  const pageSource = readWorkspaceFile(
+    'app/agents/[agentId]/versions/[versionId]/page.tsx',
+  );
+  const actionSource = readWorkspaceFile('app/actions.ts');
+
+  // FR-8: launch-run form accepts an optional input_payload JSON textarea.
+  assert.match(pageSource, /Input payload \(optional JSON\)/);
+  assert.match(pageSource, /name="input_payload"/);
+  assert.match(pageSource, /<textarea/);
+
+  // Server action parses input_payload as JSON and rejects non-object values.
+  assert.match(actionSource, /input_payload/);
+  assert.match(actionSource, /JSON\.parse/);
+});

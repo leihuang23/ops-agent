@@ -188,6 +188,17 @@ export default async function AgentVersionPage({
                   ))
                 )}
               </select>
+              <label className="launch-incident-label" htmlFor="launch_input_payload">
+                Input payload (optional JSON)
+              </label>
+              <textarea
+                id="launch_input_payload"
+                name="input_payload"
+                className="config-textarea"
+                rows={4}
+                placeholder='{}'
+                disabled={!mutationsEnabled}
+              />
               <button className="action-button" disabled={!mutationsEnabled} type="submit">
                 Launch run
               </button>
