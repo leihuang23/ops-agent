@@ -148,6 +148,7 @@ def test_pricing_table_lookup() -> None:
     from app.llm.pricing import get_pricing
 
     pricing = get_pricing("gpt-4o-mini")
+    assert pricing is not None
     assert pricing.input_price_per_1m_tokens > 0
     assert pricing.output_price_per_1m_tokens > 0
 
@@ -161,6 +162,27 @@ def test_estimate_cost_usd() -> None:
     assert cost > 0
     # 1M input @ 0.15 + 0.5M output @ 0.60 = 0.15 + 0.30 = 0.45
     assert round(cost, 2) == 0.45
+
+
+def test_estimate_cost_usd_unknown_model_returns_zero() -> None:
+    """U-19: an unknown model must not crash and must return 0.0 rather than
+    fabricating a cost from a default price (testing-strategy §4.4). The cost
+    is always labelled "estimate" in the UI; 0.0 is the honest sentinel for
+    "price unknowable"."""
+    from app.llm.pricing import estimate_cost_usd
+
+    cost = estimate_cost_usd(
+        prompt_tokens=1_000_000, completion_tokens=500_000, model="totally-unknown-model"
+    )
+    assert cost == 0.0
+
+
+def test_estimate_cost_usd_zero_tokens_returns_zero() -> None:
+    """U-20: zero tokens -> cost 0.0 (no crash), even for a known model."""
+    from app.llm.pricing import estimate_cost_usd
+
+    cost = estimate_cost_usd(prompt_tokens=0, completion_tokens=0, model="gpt-4o-mini")
+    assert cost == 0.0
 
 
 def test_tokenizer_returns_positive_count() -> None:

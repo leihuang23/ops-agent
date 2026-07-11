@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.agent.persistence import utcnow_naive
+from app.evals.comparison import classify_change, compute_pass_rate
 from app.evals.schemas import (
     EvalCaseRead,
     EvalDatasetCreate,
@@ -218,12 +219,7 @@ def compare_eval_versions(
     for eval_case_id in sorted(set(a_by_case) & set(b_by_case)):
         result_a = a_by_case[eval_case_id]
         result_b = b_by_case[eval_case_id]
-        if result_a.passed and not result_b.passed:
-            change = "regression"
-        elif not result_a.passed and result_b.passed:
-            change = "improvement"
-        else:
-            change = "unchanged"
+        change = classify_change(passed_a=result_a.passed, passed_b=result_b.passed)
         comparisons.append(
             EvalCaseComparison(
                 eval_case_id=eval_case_id,
@@ -235,8 +231,14 @@ def compare_eval_versions(
                 change=change,
             )
         )
-    pass_rate_a = sum(item.passed_a for item in comparisons) / case_count
-    pass_rate_b = sum(item.passed_b for item in comparisons) / case_count
+    pass_rate_a = compute_pass_rate(
+        passed_count=sum(item.passed_a for item in comparisons),
+        total_cases=case_count,
+    )
+    pass_rate_b = compute_pass_rate(
+        passed_count=sum(item.passed_b for item in comparisons),
+        total_cases=case_count,
+    )
     return EvalVersionComparison(
         version_a=version_a,
         version_b=version_b,

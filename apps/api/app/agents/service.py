@@ -35,6 +35,19 @@ class InvalidVersionConfigError(ValueError):
     pass
 
 
+def assert_mutable(version: AgentVersion) -> None:
+    """Raise ``ImmutableVersionError`` if ``version`` is published (FR-3, U-21).
+
+    Draft versions are mutable; published versions are frozen snapshots. Call
+    this at the boundary of any mutation path so the guard is unit-testable in
+    isolation (testing-strategy §4.5, U-21/U-22) without a DB session.
+    """
+    if version.status == "published":
+        raise ImmutableVersionError(
+            "Published versions are immutable. Create a new draft instead."
+        )
+
+
 ALLOWED_MODELS: frozenset[str] = frozenset(
     {
         "gpt-4o-mini",
@@ -481,10 +494,7 @@ def update_version(
     )
     if version is None:
         raise VersionNotFoundError(f"Unknown version: {version_id}")
-    if version.status == "published":
-        raise ImmutableVersionError(
-            "Published versions are immutable. Create a new draft instead."
-        )
+    assert_mutable(version)
 
     now = _utcnow()
     _validate_version_config(

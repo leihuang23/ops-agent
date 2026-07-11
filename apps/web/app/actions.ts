@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation';
 
 import {
   approveApprovalRequest,
+  createAgent,
   createAgentVersion,
   createIncidentFromAnomaly,
   launchRun,
@@ -29,6 +30,39 @@ export async function openIncidentFromAnomaly(formData: FormData) {
   }
 
   redirect(`/incidents/${encodeURIComponent(incident.data.id)}`);
+}
+
+export async function createAgentAction(formData: FormData) {
+  requireOperatorMutationsEnabled();
+  const id = readRequiredFormValue(formData, 'id');
+  const name = readRequiredFormValue(formData, 'name');
+  const description = formData.get('description');
+  const defaultModel = formData.get('default_model');
+  const systemPrompt = formData.get('system_prompt');
+
+  const result = await createAgent(
+    {
+      id,
+      name,
+      description:
+        typeof description === 'string' && description.length > 0 ? description : undefined,
+      default_model:
+        typeof defaultModel === 'string' && defaultModel.length > 0
+          ? defaultModel
+          : undefined,
+      system_prompt:
+        typeof systemPrompt === 'string' && systemPrompt.length > 0
+          ? systemPrompt
+          : undefined,
+    },
+    demoOperatorOptions(),
+  );
+
+  if (!result.ok) {
+    redirect(`/agents?create_error=${encodeURIComponent(result.error)}`);
+  }
+
+  redirect(`/agents/${encodeURIComponent(result.data.id)}`);
 }
 
 export async function startInvestigationFromIncident(formData: FormData) {
@@ -154,11 +188,27 @@ export async function launchControlPlaneRun(formData: FormData) {
   const agentVersionId = readRequiredFormValue(formData, 'agent_version_id');
   const agentId = readRequiredFormValue(formData, 'agent_id');
   const incidentId = readRequiredFormValue(formData, 'incident_id');
+  const inputPayloadRaw = formData.get('input_payload');
+
+  let inputPayload: Record<string, unknown> = {};
+  if (typeof inputPayloadRaw === 'string' && inputPayloadRaw.trim().length > 0) {
+    try {
+      const parsed = JSON.parse(inputPayloadRaw);
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('input_payload must be a JSON object');
+      }
+      inputPayload = parsed as Record<string, unknown>;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Invalid JSON';
+      const versionPath = `/agents/${encodeURIComponent(agentId)}/versions/${encodeURIComponent(agentVersionId)}`;
+      redirect(`${versionPath}?launch_error=${encodeURIComponent(`Invalid input_payload JSON: ${message}`)}`);
+    }
+  }
 
   const run = await launchRun(
     {
       agent_version_id: agentVersionId,
-      input_payload: {},
+      input_payload: inputPayload,
       incident_id: incidentId,
       run_inline: true,
     },

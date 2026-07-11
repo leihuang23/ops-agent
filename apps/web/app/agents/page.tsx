@@ -1,9 +1,19 @@
 import Link from 'next/link';
 
+import { createAgentAction } from '@/app/actions';
 import { listAgents } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
+import { operatorMutationsEnabled } from '@/lib/operatorMutations';
+import { ReadOnlyOperatorNotice } from '@/app/ReadOnlyOperatorNotice';
 
 export const dynamic = 'force-dynamic';
+
+const COMMON_MODELS = [
+  'gpt-4o-mini',
+  'gpt-4o',
+  'claude-3-5-sonnet-latest',
+  'claude-3-haiku-20240307',
+];
 
 function versionBadge(status: string) {
   if (status === 'published') return 'action-status action-executed';
@@ -11,8 +21,18 @@ function versionBadge(status: string) {
   return 'action-status';
 }
 
-export default async function AgentsPage() {
+export default async function AgentsPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ create_error?: string; created?: string }>;
+}) {
   const result = await listAgents();
+  const mutationsEnabled = operatorMutationsEnabled();
+  const resolvedSearchParams = await searchParams;
+  const createError =
+    typeof resolvedSearchParams?.create_error === 'string'
+      ? resolvedSearchParams.create_error
+      : null;
 
   return (
     <main className="dashboard-shell">
@@ -25,6 +45,79 @@ export default async function AgentsPage() {
           </p>
         </div>
       </header>
+
+      {createError ? (
+        <section className="panel anomaly-panel" aria-live="polite">
+          <div className="panel-message error-detail">Agent creation failed: {createError}</div>
+        </section>
+      ) : null}
+
+      <section className="panel">
+        <div className="panel-header">
+          <h2>Register a new agent</h2>
+          <span>Creates the agent and a default draft version (AC-1.1)</span>
+        </div>
+        {!mutationsEnabled ? <ReadOnlyOperatorNotice className="report-panel-wide" /> : null}
+        <form action={createAgentAction} className="form-stack">
+          <label className="field-label">
+            <span>Agent ID (slug, e.g. revenue-ops-agent)</span>
+            <input
+              type="text"
+              name="id"
+              className="field-input"
+              required
+              pattern="[a-z][a-z0-9]*(?:-[a-z0-9]+)*"
+              minLength={3}
+              maxLength={64}
+              placeholder="revenue-ops-agent"
+              disabled={!mutationsEnabled}
+            />
+          </label>
+          <label className="field-label">
+            <span>Name</span>
+            <input
+              type="text"
+              name="name"
+              className="field-input"
+              required
+              maxLength={120}
+              placeholder="Revenue Ops Agent"
+              disabled={!mutationsEnabled}
+            />
+          </label>
+          <label className="field-label">
+            <span>Description (optional)</span>
+            <input
+              type="text"
+              name="description"
+              className="field-input"
+              maxLength={2000}
+              disabled={!mutationsEnabled}
+            />
+          </label>
+          <label className="field-label">
+            <span>Default model</span>
+            <input
+              type="text"
+              name="default_model"
+              className="field-input"
+              defaultValue="gpt-4o-mini"
+              list="agent-model-suggestions"
+              disabled={!mutationsEnabled}
+            />
+            <datalist id="agent-model-suggestions">
+              {COMMON_MODELS.map((m) => (
+                <option key={m} value={m} />
+              ))}
+            </datalist>
+          </label>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button className="action-button" disabled={!mutationsEnabled} type="submit">
+              Create agent
+            </button>
+          </div>
+        </form>
+      </section>
 
       {!result.ok ? (
         <section className="panel anomaly-panel">
