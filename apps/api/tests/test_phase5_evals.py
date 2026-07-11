@@ -349,44 +349,80 @@ def test_eval_suite_task_releases_database_lock_when_suite_fails(
     assert released is True
 
 
-def test_eval_dataset_run_fails_closed_without_both_demo_tokens(
+def test_eval_dataset_run_accepts_either_operator_or_eval_token(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """FR-21: ``POST /eval-datasets/{id}/run`` accepts EITHER ``DEMO_OPERATOR_TOKEN``
+    OR ``EVAL_RUN_TOKEN`` (OR semantics, not AND). In ``demo`` the gate fails closed
+    when neither token is configured; in non-demo envs it runs ungated when neither
+    token is configured (consistent with the operator-gate pattern)."""
     monkeypatch.setattr(
         "app.evals.studio_router._enqueue_eval_dataset",
         lambda *_args: None,
     )
+    payload = {"agent_version_id": "revenue-ops-agent_phase6"}
+
+    # demo env: only the operator token is configured -> operator token alone
+    # authorizes (the eval token is NOT also required).
     monkeypatch.setenv("APP_ENV", "demo")
     monkeypatch.setenv("DEMO_OPERATOR_TOKEN", "operator-token")
     monkeypatch.delenv("EVAL_RUN_TOKEN", raising=False)
     get_settings.cache_clear()
-
-    missing_eval = client.post(
+    operator_alone = client.post(
         "/eval-datasets/mrr-drop-suite/run",
-        json={"agent_version_id": "revenue-ops-agent_phase6"},
+        json=payload,
         headers={"X-Demo-Operator-Token": "operator-token"},
     )
 
+    # demo env: both tokens configured -> eval token alone authorizes.
     monkeypatch.setenv("EVAL_RUN_TOKEN", "eval-token")
     get_settings.cache_clear()
-    missing_operator = client.post(
+    eval_alone = client.post(
         "/eval-datasets/mrr-drop-suite/run",
-        json={"agent_version_id": "revenue-ops-agent_phase6"},
+        json=payload,
         headers={"X-Eval-Run-Token": "eval-token"},
     )
-    authorized = client.post(
+    both = client.post(
         "/eval-datasets/mrr-drop-suite/run",
-        json={"agent_version_id": "revenue-ops-agent_phase6"},
+        json=payload,
         headers={
             "X-Eval-Run-Token": "eval-token",
             "X-Demo-Operator-Token": "operator-token",
         },
     )
+    no_header = client.post("/eval-datasets/mrr-drop-suite/run", json=payload)
+    wrong_tokens = client.post(
+        "/eval-datasets/mrr-drop-suite/run",
+        json=payload,
+        headers={
+            "X-Eval-Run-Token": "wrong",
+            "X-Demo-Operator-Token": "wrong",
+        },
+    )
 
-    assert missing_eval.status_code == 403
-    assert missing_operator.status_code == 403
-    assert authorized.status_code == 202
+    # demo env: neither token configured -> fail closed regardless of header.
+    monkeypatch.delenv("DEMO_OPERATOR_TOKEN", raising=False)
+    monkeypatch.delenv("EVAL_RUN_TOKEN", raising=False)
+    get_settings.cache_clear()
+    fail_closed = client.post(
+        "/eval-datasets/mrr-drop-suite/run",
+        json=payload,
+        headers={"X-Demo-Operator-Token": "anything"},
+    )
+
+    # non-demo env: neither token configured -> ungated (FR-21).
+    monkeypatch.setenv("APP_ENV", "test")
+    get_settings.cache_clear()
+    ungated = client.post("/eval-datasets/mrr-drop-suite/run", json=payload)
+
+    assert operator_alone.status_code == 202
+    assert eval_alone.status_code == 202
+    assert both.status_code == 202
+    assert no_header.status_code == 403
+    assert wrong_tokens.status_code == 403
+    assert fail_closed.status_code == 403
+    assert ungated.status_code == 202
 
 
 def test_eval_dataset_run_requires_version_run_eval_permission(

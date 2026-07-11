@@ -188,6 +188,18 @@ export default async function AgentVersionPage({
                   ))
                 )}
               </select>
+              <label className="launch-incident-label" htmlFor="launch_run_inline">
+                Execution mode
+              </label>
+              <select
+                id="launch_run_inline"
+                name="run_inline"
+                defaultValue="false"
+                disabled={!mutationsEnabled}
+              >
+                <option value="false">Queue (async via Celery)</option>
+                <option value="true">Run inline (synchronous)</option>
+              </select>
               <label className="launch-incident-label" htmlFor="launch_input_payload">
                 Input payload (optional JSON)
               </label>

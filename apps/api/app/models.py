@@ -5,6 +5,7 @@ from typing import Any
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     Float,
@@ -266,6 +267,12 @@ class AgentRun(Base):
     agent_id: Mapped[str] = mapped_column(
         String(64), ForeignKey("agents.id", ondelete="RESTRICT"), nullable=False, index=True
     )
+    # PRD §9.2 lists agent_version_id as "nullable for back-compat," but
+    # migration 0011 backfilled every NULL value and tightened the column to
+    # NOT NULL. This is intentionally stricter than the PRD: a run without a
+    # resolved version is a data-integrity hole, and the backfill removed the
+    # only rows that needed the nullable escape hatch. See implementation
+    # review §3.3.3.
     agent_version_id: Mapped[str] = mapped_column(
         String(128), ForeignKey("agent_versions.id", ondelete="RESTRICT"), nullable=False, index=True
     )
@@ -534,6 +541,17 @@ class EvalCase(Base):
 
 
 class EvalResult(Base):
+    """Per-case eval result (PRD §9.4).
+
+    Deviation from PRD §9.4 (implementation review §3.3.4): ``trace_url`` is
+    not a column on this table. Each eval result has exactly one parent
+    ``AgentRun`` (via ``agent_run_id``), and the trace URL lives on
+    ``AgentRun.trace_url``. Surfacing it via the ``agent_run`` relationship
+    avoids duplicating trace data that is already single-valued per run. The
+    eval service and API join through ``agent_run`` to populate
+    ``trace_url``/``trace_id``/``trace_provider`` in the response.
+    """
+
     __tablename__ = "eval_results"
 
     id: Mapped[str] = mapped_column(String(80), primary_key=True)
@@ -594,6 +612,13 @@ class Agent(Base):
 
 class Tool(Base):
     __tablename__ = "tools"
+    __table_args__ = (
+        CheckConstraint(
+            "permission_scope IN ('read_data', 'write_mock_action', "
+            "'request_approval', 'run_eval')",
+            name="ck_tools_permission_scope",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(80), primary_key=True)
     name: Mapped[str] = mapped_column(String(120), nullable=False, unique=True)
@@ -604,6 +629,8 @@ class Tool(Base):
         String(32), nullable=False, index=True
     )
     implementation_ref: Mapped[str] = mapped_column(String(240), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 
 class AgentVersion(Base):

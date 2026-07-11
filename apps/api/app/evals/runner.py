@@ -643,6 +643,10 @@ def eval_result_to_read(result: EvalResult) -> EvalResultRead:
         observed_evidence_types=result.observed_evidence_types,
         failure_reasons=result.failure_reasons,
         example_output=result.example_output,
+        # trace_url/trace_id/trace_provider are surfaced from the parent
+        # AgentRun, not stored as columns on EvalResult (implementation review
+        # §3.3.4). Each eval result has exactly one agent_run, so the join is
+        # single-valued and avoids duplicating trace data.
         trace_id=run.trace_id if run else None,
         trace_url=run.trace_url if run else None,
         trace_provider=run.trace_provider if run else None,

@@ -103,10 +103,18 @@ class AgentRunSummary(BaseModel):
     trace_id: str | None
     trace_url: str | None
     trace_provider: str | None
+    # LLM model/provider used for this run, extracted from ``trace_metadata``
+    # (PRD FR-20: per-run model/provider tracking). ``None`` before the LLM
+    # step runs or on the no-LLM fallback path.
+    model: str | None = None
+    provider: str | None = None
     token_estimate: int
     prompt_tokens: int
     completion_tokens: int
     cost_estimate_usd: float
+    # Count of steps blocked by the permission-scope check (PRD FR-7). Zero
+    # when no tool calls were blocked.
+    blocked_step_count: int = 0
     error: str | None
     started_at: datetime | None
     completed_at: datetime | None
@@ -129,10 +137,17 @@ class AgentRunDetail(BaseModel):
     trace_url: str | None
     trace_provider: str | None
     trace_metadata: dict[str, Any] = Field(default_factory=dict)
+    # LLM model/provider used for this run, extracted from ``trace_metadata``
+    # (PRD FR-20). Falls back to the agent version's ``model`` when the LLM
+    # step hasn't run yet.
+    model: str | None = None
+    provider: str | None = None
     token_estimate: int
     prompt_tokens: int
     completion_tokens: int
     cost_estimate_usd: float
+    # Count of steps blocked by the permission-scope check (PRD FR-7).
+    blocked_step_count: int = 0
     input_payload: dict[str, Any]
     final_report: InvestigationReport | None
     error: str | None

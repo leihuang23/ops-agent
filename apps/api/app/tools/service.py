@@ -4,6 +4,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.agent.persistence import utcnow_naive
 from app.models import Tool
 from app.tools.registry import (
     BUILTIN_TOOL_BY_ID,
@@ -24,6 +25,7 @@ class UnsupportedToolRegistrationError(ValueError):
 def register_builtin_tools(session: Session, *, commit: bool = True) -> list[ToolRead]:
     """Idempotently synchronize built-in metadata from its real Pydantic contracts."""
     tools: list[Tool] = []
+    now = utcnow_naive()
     for definition in BUILTIN_TOOL_DEFINITIONS:
         resolved = resolve_implementation_ref(definition.implementation_ref)
         if resolved is not definition.implementation:
@@ -41,11 +43,12 @@ def register_builtin_tools(session: Session, *, commit: bool = True) -> list[Too
         }
         tool = session.get(Tool, definition.id)
         if tool is None:
-            tool = Tool(id=definition.id, **values)
+            tool = Tool(id=definition.id, created_at=now, updated_at=now, **values)
             session.add(tool)
         else:
             for field_name, value in values.items():
                 setattr(tool, field_name, value)
+            tool.updated_at = now
         tools.append(tool)
 
     session.flush()
@@ -92,7 +95,8 @@ def create_tool(session: Session, payload: ToolCreate) -> ToolRead:
             f"Tool {payload.id!r} must match its audited built-in binding."
         )
     resolve_implementation_ref(definition.implementation_ref)
-    tool = Tool(**payload.model_dump())
+    now = utcnow_naive()
+    tool = Tool(created_at=now, updated_at=now, **payload.model_dump())
     session.add(tool)
     try:
         session.commit()

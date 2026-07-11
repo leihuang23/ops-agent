@@ -43,6 +43,12 @@ TOOL_REGISTRY_MIGRATION_PATH = (
     / "versions"
     / "20260710_0015_tool_registry.py"
 )
+TOOL_TIMESTAMPS_MIGRATION_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "alembic"
+    / "versions"
+    / "20260710_0016_tool_timestamps_and_scope_check.py"
+)
 
 
 def _load_migration_module(
@@ -833,14 +839,18 @@ def _build_upgraded_tool_registry_database(tmp_path, name: str) -> Engine:
 
 
 @pytest.mark.parametrize("reference_type", ["agent_run", "eval_result", "fork"])
-def test_tool_registry_downgrade_fails_closed_when_snapshot_is_referenced(
+def test_tool_registry_downgrade_reassigns_references_to_v1_when_snapshot_is_referenced(
     tmp_path,
     reference_type: str,
 ) -> None:
+    """The downgrade is reversible even when runs/evals/forks reference the
+    Phase 6 snapshots: references are reassigned to the immutable v1 source
+    before the snapshots are deleted (PRD §8 constraint 5 — reversible)."""
     engine = _build_upgraded_tool_registry_database(
         tmp_path, f"tool_registry_reference_{reference_type}.db"
     )
     now = datetime.now(timezone.utc).replace(tzinfo=None)
+    run_id = f"run_{reference_type}"
     with Session(engine) as session:
         if reference_type == "fork":
             session.add(
@@ -863,7 +873,7 @@ def test_tool_registry_downgrade_fails_closed_when_snapshot_is_referenced(
             )
         else:
             run = AgentRun(
-                id=f"run_{reference_type}",
+                id=run_id,
                 incident_id=None,
                 agent_id="revenue-ops-agent",
                 agent_version_id="revenue-ops-agent_phase6",
@@ -893,6 +903,7 @@ def test_tool_registry_downgrade_fails_closed_when_snapshot_is_referenced(
                         eval_run_id="eval_run_phase6_reference",
                         eval_case_id=eval_case.id,
                         agent_run_id=run.id,
+                        agent_version_id="revenue-ops-agent_phase6",
                         scenario=eval_case.scenario,
                         status="passed",
                         passed=True,
@@ -914,18 +925,35 @@ def test_tool_registry_downgrade_fails_closed_when_snapshot_is_referenced(
                 )
         session.commit()
 
-    with pytest.raises(RuntimeError, match="referenced"):
-        _run_in_migration_context(
-            engine,
-            "downgrade",
-            path=TOOL_REGISTRY_MIGRATION_PATH,
-            module_name="migration_20260710_0015_tool_registry",
-        )
+    _run_in_migration_context(
+        engine,
+        "downgrade",
+        path=TOOL_REGISTRY_MIGRATION_PATH,
+        module_name="migration_20260710_0015_tool_registry",
+    )
 
-    assert "tools" in inspect(engine).get_table_names()
+    # The tools table and Phase 6 snapshots are gone.
+    assert "tools" not in inspect(engine).get_table_names()
     with Session(engine) as session:
-        assert session.get(AgentVersion, "revenue-ops-agent_phase6") is not None
-        assert session.get(AgentVersion, "revenue-ops-agent_phase6_degraded") is not None
+        assert session.get(AgentVersion, "revenue-ops-agent_phase6") is None
+        assert session.get(AgentVersion, "revenue-ops-agent_phase6_degraded") is None
+        assert session.get(AgentVersion, "revenue-ops-agent_v1") is not None
+
+        if reference_type == "agent_run":
+            run_row = session.get(AgentRun, run_id)
+            assert run_row is not None
+            assert run_row.agent_version_id == "revenue-ops-agent_v1"
+        elif reference_type == "eval_result":
+            run_row = session.get(AgentRun, run_id)
+            assert run_row is not None
+            assert run_row.agent_version_id == "revenue-ops-agent_v1"
+            eval_row = session.get(EvalResult, "eval_result_phase6_reference")
+            assert eval_row is not None
+            assert eval_row.agent_version_id == "revenue-ops-agent_v1"
+        elif reference_type == "fork":
+            fork = session.get(AgentVersion, "operator_phase6_fork")
+            assert fork is not None
+            assert fork.forked_from_version_id == "revenue-ops-agent_v1"
     engine.dispose()
 
 
@@ -959,4 +987,142 @@ def test_tool_registry_downgrade_removes_unreferenced_bootstrap_owned_snapshots(
         assert session.get(AgentVersion, "revenue-ops-agent_phase6") is None
         assert session.get(AgentVersion, "revenue-ops-agent_phase6_degraded") is None
         assert session.get(AgentVersion, "revenue-ops-agent_v1") is not None
+    engine.dispose()
+
+
+def _build_pre_0016_tools_table(tmp_path) -> Engine:
+    """Build the ``tools`` table as migration 0015 created it: no timestamps,
+    no CHECK constraint on ``permission_scope``."""
+    engine = create_engine(f"sqlite:///{tmp_path / 'tool_timestamps_migration.db'}")
+    metadata = sa.MetaData()
+    sa.Table(
+        "tools",
+        metadata,
+        sa.Column("id", sa.String(80), primary_key=True),
+        sa.Column("name", sa.String(120), nullable=False),
+        sa.Column("description", sa.Text, nullable=False),
+        sa.Column("input_schema", sa.JSON, nullable=False),
+        sa.Column("output_schema", sa.JSON, nullable=False),
+        sa.Column("permission_scope", sa.String(32), nullable=False),
+        sa.Column("implementation_ref", sa.String(240), nullable=False),
+        sa.UniqueConstraint("name", name="uq_tools_name"),
+    )
+    metadata.create_all(engine)
+    return engine
+
+
+def test_tool_timestamps_migration_revision_links_to_previous_head() -> None:
+    migration = _load_migration_module(
+        TOOL_TIMESTAMPS_MIGRATION_PATH,
+        "migration_20260710_0016_tool_timestamps_and_scope_check",
+    )
+    assert migration.revision == "20260710_0016"
+    assert migration.down_revision == "20260710_0015"
+
+
+def test_tool_timestamps_migration_adds_columns_and_backfills_existing_rows(
+    tmp_path,
+) -> None:
+    """Migration 0016 adds NOT NULL created_at/updated_at and backfills any
+    existing tools rows with a server default (PRD §9.1)."""
+    engine = _build_pre_0016_tools_table(tmp_path)
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                "INSERT INTO tools (id, name, description, input_schema, output_schema, "
+                "permission_scope, implementation_ref) VALUES "
+                "('search_docs', 'search_docs', 'desc', '{}', '{}', 'read_data', "
+                "'app.agent.tools.search_docs')"
+            )
+        )
+
+    _run_in_migration_context(
+        engine,
+        "upgrade",
+        path=TOOL_TIMESTAMPS_MIGRATION_PATH,
+        module_name="migration_20260710_0016_tool_timestamps_and_scope_check",
+    )
+
+    inspector = inspect(engine)
+    cols = {c["name"]: c for c in inspector.get_columns("tools")}
+    assert "created_at" in cols
+    assert "updated_at" in cols
+    assert cols["created_at"]["nullable"] is False
+    assert cols["updated_at"]["nullable"] is False
+
+    # Existing row was backfilled (not NULL).
+    with engine.connect() as conn:
+        row = conn.execute(
+            sa.text("SELECT created_at, updated_at FROM tools WHERE id='search_docs'")
+        ).fetchone()
+    assert row is not None
+    assert row[0] is not None
+    assert row[1] is not None
+    engine.dispose()
+
+
+def test_tool_timestamps_migration_check_constraint_rejects_invalid_scope(
+    tmp_path,
+) -> None:
+    """Migration 0016 adds a DB-level CHECK constraint on permission_scope so
+    a raw insert outside the Pydantic API cannot land an invalid value."""
+    engine = _build_pre_0016_tools_table(tmp_path)
+
+    _run_in_migration_context(
+        engine,
+        "upgrade",
+        path=TOOL_TIMESTAMPS_MIGRATION_PATH,
+        module_name="migration_20260710_0016_tool_timestamps_and_scope_check",
+    )
+
+    from sqlalchemy.exc import IntegrityError as SAIntegrityError
+
+    with pytest.raises(SAIntegrityError):
+        with engine.begin() as conn:
+            conn.execute(
+                sa.text(
+                    "INSERT INTO tools (id, name, description, input_schema, output_schema, "
+                    "permission_scope, implementation_ref, created_at, updated_at) VALUES "
+                    "('bad_scope', 'bad_scope', 'desc', '{}', '{}', 'delete_production', "
+                    "'app.test', '2026-07-10', '2026-07-10')"
+                )
+            )
+    engine.dispose()
+
+
+def test_tool_timestamps_migration_downgrade_drops_columns_and_constraint(
+    tmp_path,
+) -> None:
+    """Migration 0016 is reversible: the downgrade drops the CHECK constraint
+    and both timestamp columns, restoring the 0015 schema."""
+    engine = _build_pre_0016_tools_table(tmp_path)
+
+    _run_in_migration_context(
+        engine,
+        "upgrade",
+        path=TOOL_TIMESTAMPS_MIGRATION_PATH,
+        module_name="migration_20260710_0016_tool_timestamps_and_scope_check",
+    )
+    _run_in_migration_context(
+        engine,
+        "downgrade",
+        path=TOOL_TIMESTAMPS_MIGRATION_PATH,
+        module_name="migration_20260710_0016_tool_timestamps_and_scope_check",
+    )
+
+    inspector = inspect(engine)
+    cols = {c["name"] for c in inspector.get_columns("tools")}
+    assert "created_at" not in cols
+    assert "updated_at" not in cols
+
+    # An invalid scope is now accepted again (CHECK constraint removed).
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                "INSERT INTO tools (id, name, description, input_schema, output_schema, "
+                "permission_scope, implementation_ref) VALUES "
+                "('bad_scope', 'bad_scope', 'desc', '{}', '{}', 'delete_production', "
+                "'app.test')"
+            )
+        )
     engine.dispose()

@@ -590,6 +590,106 @@ def test_list_runs_filters_by_version_and_status(
     assert all_ids[0] in {"run_succeeded_v1", "run_failed_v1", "run_succeeded_other"}
 
 
+def test_run_summary_and_detail_expose_model_provider_and_blocked_count(
+    session_factory: Callable[[], Session],
+) -> None:
+    """FR-20 / FR-7: the run summary and detail expose the LLM ``model`` and
+    ``provider`` (extracted from ``trace_metadata``) and a ``blocked_step_count``
+    so a reviewer can see which runs had permission-blocked tool calls without
+    drilling into individual steps."""
+    _seed(session_factory)
+    client, _ = _client_with_db(session_factory)
+
+    now = utcnow_naive()
+    with session_factory() as session:
+        run = AgentRun(
+            id="run_model_blocked",
+            incident_id=SEEDED_INCIDENT_ID,
+            agent_id=DEFAULT_AGENT_ID,
+            agent_version_id=DEFAULT_AGENT_VERSION_ID,
+            status="succeeded",
+            trace_id="trace_model_blocked",
+            trace_url="local://agent-runs/run_model_blocked",
+            trace_provider="local",
+            trace_metadata={
+                "llm_provider": "openai",
+                "llm_model": "gpt-4o-mini",
+                "llm_used": True,
+            },
+            input_payload={},
+            final_report=None,
+            token_estimate=100,
+            prompt_tokens=60,
+            completion_tokens=40,
+            cost_estimate_usd=0.001,
+            error=None,
+            started_at=now - timedelta(seconds=5),
+            completed_at=now,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(run)
+        # One blocked step (scope denied) + one succeeded step.
+        session.add(AgentRunStep(
+            id="step_blocked_1",
+            run_id=run.id,
+            sequence=1,
+            stage="tool_dispatch",
+            tool_name="run_eval",
+            status="blocked",
+            inputs={"tool_id": "run_eval"},
+            outputs=None,
+            error=None,
+            blocked_reason="scope_not_allowed",
+            started_at=now,
+            completed_at=now,
+            created_at=now,
+        ))
+        session.add(AgentRunStep(
+            id="step_ok_1",
+            run_id=run.id,
+            sequence=2,
+            stage="evidence",
+            tool_name="query_revenue_metrics",
+            status="succeeded",
+            inputs={},
+            outputs={"mrr": 100},
+            error=None,
+            blocked_reason=None,
+            started_at=now,
+            completed_at=now,
+            created_at=now,
+        ))
+        session.commit()
+
+    # Summary (GET /runs) carries model/provider/blocked_step_count.
+    runs = client.get("/runs").json()
+    summary = next(r for r in runs if r["id"] == "run_model_blocked")
+    assert summary["model"] == "gpt-4o-mini"
+    assert summary["provider"] == "openai"
+    assert summary["blocked_step_count"] == 1
+
+    # Detail (GET /runs/{id}) carries the same fields.
+    detail = client.get("/runs/run_model_blocked").json()
+    assert detail["model"] == "gpt-4o-mini"
+    assert detail["provider"] == "openai"
+    assert detail["blocked_step_count"] == 1
+
+    # A run without trace_metadata llm_* keys falls back to the agent version
+    # model for ``model`` and None for ``provider``.
+    with session_factory() as session:
+        _make_run(
+            session,
+            run_id="run_no_llm",
+            status="succeeded",
+            incident_id=SEEDED_INCIDENT_ID,
+        )
+    no_llm_detail = client.get("/runs/run_no_llm").json()
+    assert no_llm_detail["model"] is not None  # falls back to version model
+    assert no_llm_detail["provider"] is None
+    assert no_llm_detail["blocked_step_count"] == 0
+
+
 def test_get_run_steps_returns_step_history(
     session_factory: Callable[[], Session],
 ) -> None:
@@ -1030,6 +1130,81 @@ def test_executor_failure_does_not_overwrite_concurrent_force_succeed(
     assert run is not None
     assert run.status == "succeeded"
     assert run.error is None
+
+
+def test_executor_refuses_to_execute_draft_agent_version(
+    session_factory: Callable[[], Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PRD FR-3 defense-in-depth: the runtime must never read draft
+    configuration. Run creation gates drafts out via ``get_published_version``,
+    but if a run row ever points at a draft (direct DB edit, a future code path,
+    or a race that bypasses creation-time gating), the executor fails the run
+    with a clear error instead of executing the draft's prompt/model/tools. The
+    investigation workflow is never invoked."""
+    from app.agent.service import execute_investigation_run_with_session
+    from app.models import AgentVersion
+
+    _seed(session_factory)
+
+    # Create a draft version directly (bypassing the publish gate), then point a
+    # run at it directly (bypassing creation-time gating) to simulate the
+    # invariant violation the execution-time check defends against.
+    with session_factory() as session:
+        now = utcnow_naive()
+        session.add(
+            AgentVersion(
+                id="revenue-ops-agent_draft_test",
+                agent_id=DEFAULT_AGENT_ID,
+                version_number=None,
+                semantic_version=None,
+                status="draft",
+                system_prompt="DRAFT PROMPT - MUST NEVER EXECUTE",
+                model="gpt-4o-mini",
+                temperature=0.1,
+                max_tokens=1024,
+                enabled_tool_ids=["query_revenue_metrics"],
+                allowed_scopes=["read_data"],
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        _make_run(
+            session,
+            run_id="run_pointed_at_draft",
+            status="queued",
+            agent_version_id="revenue-ops-agent_draft_test",
+            incident_id=SEEDED_INCIDENT_ID,
+        )
+
+    workflow_calls: list[tuple] = []
+
+    def fail_if_called(*_args, **_kwargs):
+        workflow_calls.append((_args, _kwargs))
+        raise AssertionError("workflow must not be invoked for a draft version")
+
+    monkeypatch.setattr("app.agent.service.run_investigation_workflow", fail_if_called)
+
+    with session_factory() as session:
+        detail = execute_investigation_run_with_session(session, "run_pointed_at_draft")
+
+    assert detail.status == "failed"
+    assert detail.error is not None
+    assert "not published" in detail.error
+    assert "draft" in detail.error.lower()
+    # The investigation workflow was never invoked, so no draft config was read.
+    assert workflow_calls == []
+
+    with session_factory() as session:
+        run = session.get(AgentRun, "run_pointed_at_draft")
+        assert run is not None
+        assert run.status == "failed"
+        steps = (
+            session.query(AgentRunStep)
+            .filter(AgentRunStep.run_id == "run_pointed_at_draft")
+            .all()
+        )
+        assert steps == []
 
 
 def test_post_runs_async_returns_queued_and_enqueues_task(

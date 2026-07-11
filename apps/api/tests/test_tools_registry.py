@@ -6,6 +6,7 @@ from datetime import datetime
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 import app.models  # noqa: F401
@@ -265,3 +266,87 @@ def test_create_only_tool_cannot_generate_a_high_risk_approval(
 
         assert session.query(MockAction).count() == 0
         assert session.query(ApprovalRequest).count() == 0
+
+
+def test_tool_rows_carry_created_at_and_updated_at_timestamps(
+    session_factory: Callable[[], Session],
+) -> None:
+    """PRD §9.1: the tools table must carry created_at/updated_at timestamps.
+    Every seeded built-in tool must have both set after bootstrap registration."""
+    with session_factory() as session:
+        tools = session.query(Tool).order_by(Tool.id).all()
+        assert len(tools) == len(BUILTIN_TOOL_DEFINITIONS)
+        for tool in tools:
+            assert tool.created_at is not None
+            assert tool.updated_at is not None
+
+
+def test_register_builtin_tools_preserves_created_at_and_bumps_updated_at(
+    session_factory: Callable[[], Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Re-registering built-in tools (the idempotent bootstrap path) must keep
+    ``created_at`` stable while advancing ``updated_at`` to reflect the sync."""
+    from datetime import timedelta
+
+    import app.tools.service as tools_service
+
+    with session_factory() as session:
+        original = session.get(Tool, "search_docs")
+        assert original is not None
+        original_created = original.created_at
+        original_updated = original.updated_at
+
+    # Advance the clock so updated_at must move forward past the original.
+    future = original_updated + timedelta(seconds=10)
+    monkeypatch.setattr(tools_service, "utcnow_naive", lambda: future)
+
+    register_builtin_tools(session_factory())
+
+    with session_factory() as session:
+        refreshed = session.get(Tool, "search_docs")
+        assert refreshed is not None
+        assert refreshed.created_at == original_created
+        assert refreshed.updated_at == future
+
+
+def test_tool_permission_scope_check_rejects_invalid_scope(
+    session_factory: Callable[[], Session],
+) -> None:
+    """PRD §9.1: permission_scope is a DB-level enum (CHECK constraint) so a
+    raw DB insert outside the Pydantic-validated API cannot land an invalid scope.
+
+    Explicit ``created_at``/``updated_at`` are passed so the only possible
+    violation is the CHECK constraint on ``permission_scope`` (not the NOT NULL
+    on the timestamp columns), making the assertion unambiguous. The raw-SQL
+    migration-level test in ``test_migrations.py`` covers the same constraint
+    at the DB layer.
+    """
+    now = datetime.now()
+    with session_factory() as session:
+        invalid = Tool(
+            id="invalid_scope_tool",
+            name="invalid_scope_tool",
+            description="Should be rejected by the CHECK constraint.",
+            input_schema={"type": "object"},
+            output_schema={"type": "object"},
+            permission_scope="delete_production",
+            implementation_ref="app.agent.tools.search_docs",
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(invalid)
+        with pytest.raises(IntegrityError):
+            session.commit()
+        session.rollback()
+
+
+def test_tool_read_exposes_timestamps(client: TestClient) -> None:
+    """The tool registry API surface exposes created_at/updated_at (PRD §9.1)."""
+    response = client.get("/tools/search_docs")
+    assert response.status_code == 200
+    payload = response.json()
+    assert "created_at" in payload
+    assert "updated_at" in payload
+    assert payload["created_at"] is not None
+    assert payload["updated_at"] is not None

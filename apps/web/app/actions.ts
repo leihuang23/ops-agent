@@ -187,8 +187,17 @@ export async function launchControlPlaneRun(formData: FormData) {
   requireOperatorMutationsEnabled();
   const agentVersionId = readRequiredFormValue(formData, 'agent_version_id');
   const agentId = readRequiredFormValue(formData, 'agent_id');
+  // The v1 investigation workflow is incident-bound: the intake node loads the
+  // incident by id, and the executor fails any run with incident_id=null
+  // (agent/service.py). Keep the form field required so a launch never queues
+  // a run that is guaranteed to fail at execution time.
   const incidentId = readRequiredFormValue(formData, 'incident_id');
   const inputPayloadRaw = formData.get('input_payload');
+  const runInlineRaw = formData.get('run_inline');
+
+  // run_inline defaults to false (async via Celery). When the operator opts
+  // into an inline run, the select submits "true".
+  const runInline = runInlineRaw === 'true';
 
   let inputPayload: Record<string, unknown> = {};
   if (typeof inputPayloadRaw === 'string' && inputPayloadRaw.trim().length > 0) {
@@ -210,7 +219,7 @@ export async function launchControlPlaneRun(formData: FormData) {
       agent_version_id: agentVersionId,
       input_payload: inputPayload,
       incident_id: incidentId,
-      run_inline: true,
+      run_inline: runInline,
     },
     demoOperatorOptions(),
   );

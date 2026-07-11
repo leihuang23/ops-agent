@@ -6,8 +6,8 @@ from sqlalchemy.orm import Session
 from app.core.access import require_demo_data_access
 from app.db.session import get_db
 
-from .schemas import AgentVersionObservability
-from .service import get_agent_version_dashboard
+from .schemas import AgentObservabilitySummary, AgentVersionObservability
+from .service import get_agent_dashboard, get_agent_version_dashboard
 
 
 # Read-only: the dashboard surfaces aggregates only (PRD FR-19). Gated by the
@@ -25,10 +25,11 @@ router = APIRouter(
 @router.get("/agents")
 def list_agents_dashboard(
     db: Session = Depends(get_db),
-) -> list[AgentVersionObservability]:
-    """Per-version observability aggregates across every agent version that
-    has at least one run."""
-    return get_agent_version_dashboard(db)
+) -> list[AgentObservabilitySummary]:
+    """Per-agent summary collapsing all versions into one row per agent
+    (PRD §10: per-agent summary). Use ``GET /dashboard/agents/{agent_id}`` for
+    the per-version breakdown."""
+    return get_agent_dashboard(db)
 
 
 @router.get("/agents/{agent_id}")
