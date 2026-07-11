@@ -113,7 +113,7 @@ test.describe.serial('Phase 6 portfolio readiness', () => {
     await page.goto('/dashboard');
 
     await expect(page.getByRole('heading', { name: 'Trace, cost & latency' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Per-agent-version aggregates' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Per-agent summaries' })).toBeVisible();
     await expect(page.getByText('Total estimated cost')).toBeVisible();
     await expect(page.getByText(/Cost values are estimates/)).toBeVisible();
     await expect(page.getByRole('link', { name: 'Runs' }).first()).toBeVisible();
