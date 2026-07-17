@@ -1723,3 +1723,23 @@ def test_recorder_commits_periodically_for_mid_run_visibility(
         assert len(visible_steps) >= 5, (
             f"Expected >=5 committed steps visible mid-run, got {len(visible_steps)}"
         )
+
+
+def test_investigation_report_rejects_empty_cited_evidence() -> None:
+    """PRD success criterion: every final report cites SQL/ticket/doc evidence.
+    The schema must enforce non-emptiness rather than relying only on the
+    workflow and eval scoring (review finding F-10)."""
+    import pydantic
+    from app.agent.schemas import InvestigationReport
+    from app.agent.persistence import utcnow_naive
+
+    with pytest.raises(pydantic.ValidationError):
+        InvestigationReport(
+            root_cause="anything",
+            summary="summary",
+            affected_accounts=[],
+            cited_evidence=[],
+            confidence="low",
+            next_actions=[],
+            generated_at=utcnow_naive(),
+        )

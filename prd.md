@@ -1,6 +1,9 @@
 ## Recommended Stack
 
-- Frontend: Next.js, TypeScript, Tailwind CSS, shadcn/ui.
+- Frontend: Next.js, TypeScript, hand-rolled CSS with design tokens (`app/globals.css`).
+  (Revised 2026-07-17: originally "Tailwind CSS, shadcn/ui"; the shipped UI uses
+  hand-written CSS, which proved sufficient for the dense operational surfaces. Adopt
+  Tailwind/shadcn only if a future surface genuinely needs them.)
 - Backend: FastAPI, Pydantic v2, SQLAlchemy 2, Alembic.
 - Data: PostgreSQL, pgvector, Redis.
 - Agent orchestration: LangGraph.

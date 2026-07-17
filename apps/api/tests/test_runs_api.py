@@ -998,7 +998,7 @@ def test_executor_success_does_not_overwrite_concurrent_force_fail(
     periodic commits) so the executor's subsequent SELECTs observe the committed
     force-fail instead of a stale snapshot, then force-fails the run in a
     separate session to model the concurrent operator action."""
-    from app.agent.schemas import InvestigationReport
+    from app.agent.schemas import InvestigationReport, ReportEvidence
     from app.agent.service import execute_investigation_run_with_session
 
     _seed(session_factory)
@@ -1014,7 +1014,14 @@ def test_executor_success_does_not_overwrite_concurrent_force_fail(
         root_cause="seeded root cause",
         summary="workflow completed",
         affected_accounts=[],
-        cited_evidence=[],
+        cited_evidence=[
+            ReportEvidence(
+                kind="sql",
+                title="seeded evidence",
+                summary="evidence summary",
+                reference_id="ev_seed",
+            )
+        ],
         confidence="high",
         next_actions=[],
         generated_at=utcnow_naive(),

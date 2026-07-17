@@ -1,10 +1,14 @@
 import uuid
 
 from fastapi import FastAPI, Request, Response
+from fastapi.exception_handlers import (
+    http_exception_handler as default_http_exception_handler,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.accounts.router import router as accounts_router
 from app.agent.router import router as agent_router
@@ -64,6 +68,18 @@ def create_app() -> FastAPI:
             },
             headers=headers,
         )
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_exception_handler(
+        request: Request, exc: StarletteHTTPException
+    ) -> JSONResponse:
+        """Route anonymous 404s (unmatched paths) through the structured
+        error envelope so every error shape carries code/message/request_id
+        (NFR-7). Router-raised HTTPExceptions with a descriptive ``detail``
+        keep their existing contract via FastAPI's default handler."""
+        if exc.status_code == 404 and exc.detail == "Not Found":
+            return error_response("not_found", "Not Found", 404)
+        return await default_http_exception_handler(request, exc)
 
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(

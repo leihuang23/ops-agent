@@ -3,11 +3,15 @@ from __future__ import annotations
 from collections.abc import Callable
 from threading import Lock
 
+from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy import text
 
 from app.celery_app import celery_app
 from app.db.session import SessionLocal, engine
-from app.evals.runner import run_eval_suite
+from app.evals.runner import record_eval_suite_timeout, run_eval_suite
+from app.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 _PROCESS_EVAL_LOCK = Lock()
@@ -62,25 +66,50 @@ def run_eval_suite_task(
     can advertise it before the task runs. Not retryable: a partial eval run
     would double-count scenarios or corrupt scoring, so fail-fast is safer
     than a blind retry. The Celery ``task_time_limit`` / ``task_soft_time_limit``
-    guard against hangs.
+    guard against hangs; when the soft limit fires, unfinished cases receive a
+    terminal ``soft_time_limit_exceeded`` failure marker (so the run reads as
+    ``failed`` immediately) and the timeout is re-raised for Celery to record.
     """
     # A/B suites investigate the same seeded incidents. Serialize them so the
     # active-incident uniqueness guard never turns worker scheduling into a
     # false evaluation failure. The process lock covers eager/unit execution;
     # the PostgreSQL advisory lock covers multiple Celery processes/hosts.
-    with _PROCESS_EVAL_LOCK:
-        release_postgres_lock = _acquire_postgres_eval_lock()
+    try:
+        with _PROCESS_EVAL_LOCK:
+            release_postgres_lock = _acquire_postgres_eval_lock()
+            try:
+                with SessionLocal() as session:
+                    summary = run_eval_suite(
+                        session,
+                        eval_run_id=eval_run_id,
+                        dataset_id=dataset_id,
+                        agent_version_id=agent_version_id,
+                    )
+            finally:
+                if release_postgres_lock is not None:
+                    release_postgres_lock()
+    except SoftTimeLimitExceeded:
+        # The in-flight session rolled back on exit. Record terminal failure
+        # markers for cases that never completed so the suite reads as
+        # ``failed`` immediately, not ``running`` until the read-path
+        # staleness self-heal fires. If the cleanup itself fails (DB down),
+        # re-raise the *original* timeout so Celery records it; the partial
+        # run is then left for the read-path self-heal.
         try:
             with SessionLocal() as session:
-                summary = run_eval_suite(
+                record_eval_suite_timeout(
                     session,
                     eval_run_id=eval_run_id,
                     dataset_id=dataset_id,
                     agent_version_id=agent_version_id,
                 )
-        finally:
-            if release_postgres_lock is not None:
-                release_postgres_lock()
+        except Exception:
+            logger.exception(
+                "Failed to record eval suite timeout markers; "
+                "leaving the partial run for the read-path self-heal",
+                extra={"eval_run_id": eval_run_id},
+            )
+        raise
 
     return {
         "eval_run_id": summary.eval_run_id,

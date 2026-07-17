@@ -8,6 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from app.agent.service import abandon_orphaned_active_runs
+from app.db.schema_check import assert_schema_compatible
 from app.db.session import SessionLocal, engine
 from app.logging_config import configure_logging, get_logger
 from app.seed import ensure_seeded_if_empty
@@ -50,6 +51,9 @@ def run_startup_bootstrap() -> None:
     configure_logging()
     with bootstrap_lock(engine):
         run_migrations()
+        # Migrations only prove the version stamp; verify the schema surface
+        # startup depends on before touching it (divergent-stamp guard).
+        assert_schema_compatible(engine)
         with SessionLocal() as session:
             register_builtin_tools(session)
             result = ensure_seeded_if_empty(session)

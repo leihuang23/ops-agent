@@ -38,7 +38,7 @@ def investigate_incident(run_id: str) -> dict[str, object]:
         try:
             with SessionLocal() as session:
                 mark_run_failed_on_timeout(
-                    session, run_id, reason="celery soft time limit exceeded"
+                    session, run_id, reason="soft_time_limit_exceeded"
                 )
         except Exception:
             logger.exception(

@@ -431,6 +431,74 @@ def _build_failed_eval_result(
     )
 
 
+def record_eval_suite_timeout(
+    session: Session,
+    *,
+    eval_run_id: str,
+    dataset_id: str | None,
+    agent_version_id: str | None,
+    reason: str = "soft_time_limit_exceeded",
+    only_scenarios: set[str] | None = None,
+) -> int:
+    """Persist terminal failure markers for cases with no result yet.
+
+    Called from the Celery task's ``SoftTimeLimitExceeded`` handler so a
+    soft-killed suite reads as terminal ``failed`` immediately, instead of
+    ``running`` until the read-path staleness self-heal fires. Cases that
+    already committed a result are left untouched (one row per case), so the
+    derived summary stays honest about what actually completed.
+
+    ``only_scenarios`` narrows the marker set; it exists so tests can
+    simulate a partially completed suite without running the workflow.
+    Returns the number of marker rows written.
+    """
+    case_stmt = select(EvalCase)
+    if dataset_id is not None:
+        case_stmt = case_stmt.join(
+            EvalDatasetCase,
+            EvalDatasetCase.eval_case_id == EvalCase.id,
+        ).where(EvalDatasetCase.dataset_id == dataset_id)
+    cases = session.scalars(case_stmt.order_by(EvalCase.id)).all()
+    completed_case_ids = set(
+        session.scalars(
+            select(EvalResult.eval_case_id).where(
+                EvalResult.eval_run_id == eval_run_id
+            )
+        )
+    )
+    now = utcnow_naive()
+    recorded = 0
+    for case in cases:
+        if case.id in completed_case_ids:
+            continue
+        if only_scenarios is not None and case.scenario not in only_scenarios:
+            continue
+        failed_run = _record_failed_agent_run(
+            session,
+            incident_id=case.incident_id,
+            error=reason,
+            started_at=now,
+            completed_at=now,
+            agent_version_id=agent_version_id,
+        )
+        session.add(
+            _build_failed_eval_result(
+                eval_run_id=eval_run_id,
+                case=case,
+                failed_run=failed_run,
+                error=reason,
+                latency_ms=0,
+                started_at=now,
+                completed_at=now,
+                dataset_id=dataset_id,
+                agent_version_id=agent_version_id,
+            )
+        )
+        recorded += 1
+    session.commit()
+    return recorded
+
+
 def score_eval_case(case: EvalCase, run_detail: AgentRunDetail) -> dict[str, Any]:
     report = run_detail.final_report
     actual_root_cause = report.root_cause if report is not None else None
