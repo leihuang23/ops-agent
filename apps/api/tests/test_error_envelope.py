@@ -86,3 +86,31 @@ def test_documents_ingest_maps_integrity_error_to_409(monkeypatch) -> None:
     finally:
         app.dependency_overrides.pop(get_db, None)
         get_settings.cache_clear()
+
+
+def test_unmatched_route_returns_structured_404() -> None:
+    """Anonymous-route 404s (no matching path) must use the same structured
+    error envelope as every other error (NFR-7), not FastAPI's default
+    ``{"detail": "Not Found"}`` body. Domain 404s raised by routers keep
+    their existing ``detail`` contract."""
+
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.get("/__no-such-route__")
+
+    assert response.status_code == 404
+    body = response.json()
+    assert body["error"]["code"] == "not_found"
+    assert body["error"]["request_id"]
+
+
+def test_domain_404_keeps_detail_contract() -> None:
+    """Router-raised HTTPExceptions with a descriptive detail keep the
+    ``{"detail": ...}`` shape the frontend and tests already consume."""
+
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.get("/agents/__unknown-agent-id__")
+
+    assert response.status_code == 404
+    body = response.json()
+    assert "detail" in body
+    assert "Unknown agent id" in body["detail"]

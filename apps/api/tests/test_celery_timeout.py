@@ -78,12 +78,12 @@ def test_mark_run_failed_on_timeout_flips_in_flight_run_to_failed(
         )
 
         mark_run_failed_on_timeout(
-            session, run.id, reason="celery soft time limit exceeded"
+            session, run.id, reason="soft_time_limit_exceeded"
         )
         session.refresh(run)
 
     assert run.status == "failed"
-    assert run.error == "celery soft time limit exceeded"
+    assert run.error == "soft_time_limit_exceeded"
     assert run.completed_at is not None
 
 
@@ -103,7 +103,7 @@ def test_mark_run_failed_on_timeout_does_not_clobber_terminal_run(
         session.commit()
 
         mark_run_failed_on_timeout(
-            session, run.id, reason="celery soft time limit exceeded"
+            session, run.id, reason="soft_time_limit_exceeded"
         )
         session.refresh(run)
 
@@ -146,7 +146,7 @@ def test_investigate_incident_task_marks_run_failed_on_soft_time_limit(
 
     assert run is not None
     assert run.status == "failed"
-    assert run.error == "celery soft time limit exceeded"
+    assert run.error == "soft_time_limit_exceeded"
 
 
 def test_investigate_incident_task_reraises_original_timeout_when_cleanup_fails(
@@ -186,3 +186,103 @@ def test_investigate_incident_task_reraises_original_timeout_when_cleanup_fails(
     # The original SoftTimeLimitExceeded must win over the cleanup RuntimeError.
     with pytest.raises(SoftTimeLimitExceeded):
         investigate_incident.run("run_timeout_cleanup_fails")
+
+
+def test_eval_suite_task_records_timeout_markers_for_unfinished_cases(
+    session_factory: Callable[[], Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the soft time limit fires mid-suite, the task must persist a
+    terminal failure marker for every case that never completed, so the eval
+    run reads as 'failed' immediately instead of 'running' until the read-path
+    staleness self-heal fires (up to the task limit plus 300s)."""
+    from app.evals.runner import build_eval_run_summary
+    from app.evals.tasks import run_eval_suite_task
+
+    with session_factory() as session:
+        reseed_database(session)
+
+    def raising_suite(session: Session, **kwargs: object) -> None:
+        raise SoftTimeLimitExceeded()
+
+    monkeypatch.setattr("app.evals.tasks.run_eval_suite", raising_suite)
+    monkeypatch.setattr("app.evals.tasks.SessionLocal", session_factory)
+
+    with pytest.raises(SoftTimeLimitExceeded):
+        run_eval_suite_task.run(eval_run_id="evalrun_timeout_full")
+
+    with session_factory() as session:
+        summary = build_eval_run_summary(session, "evalrun_timeout_full")
+
+    assert summary is not None
+    assert summary.status == "failed"
+    assert summary.total_scenarios == 6
+    for result in summary.results:
+        assert result.passed is False
+        assert result.failure_reasons == ["soft_time_limit_exceeded"]
+
+
+def test_eval_suite_task_timeout_preserves_completed_case_results(
+    session_factory: Callable[[], Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cases that already committed a real result keep it; only the cases
+    that never ran receive a timeout marker."""
+    from app.evals.runner import build_eval_run_summary, record_eval_suite_timeout
+    from app.evals.tasks import run_eval_suite_task
+
+    with session_factory() as session:
+        reseed_database(session)
+        # Simulate one case finishing before the limit fired by pre-recording
+        # timeout markers for all but one case through the helper itself.
+        record_eval_suite_timeout(
+            session,
+            eval_run_id="evalrun_timeout_partial",
+            dataset_id=None,
+            agent_version_id=None,
+            only_scenarios={"usage_drop_after_import_outage"},
+        )
+
+    def raising_suite(session: Session, **kwargs: object) -> None:
+        raise SoftTimeLimitExceeded()
+
+    monkeypatch.setattr("app.evals.tasks.run_eval_suite", raising_suite)
+    monkeypatch.setattr("app.evals.tasks.SessionLocal", session_factory)
+
+    with pytest.raises(SoftTimeLimitExceeded):
+        run_eval_suite_task.run(eval_run_id="evalrun_timeout_partial")
+
+    with session_factory() as session:
+        summary = build_eval_run_summary(session, "evalrun_timeout_partial")
+
+    assert summary is not None
+    assert summary.status == "failed"
+    assert summary.total_scenarios == 6
+    # The pre-existing row must be untouched: exactly one row per case.
+    by_scenario = [result.scenario for result in summary.results]
+    assert len(by_scenario) == len(set(by_scenario))
+
+
+def test_eval_suite_task_reraises_original_timeout_when_marker_write_fails(
+    session_factory: Callable[[], Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If writing the timeout markers itself fails (DB unavailable), the
+    original SoftTimeLimitExceeded must still propagate so Celery records the
+    timeout; the partial run is then left for the read-path self-heal."""
+    from app.evals.tasks import run_eval_suite_task
+
+    def raising_suite(session: Session, **kwargs: object) -> None:
+        raise SoftTimeLimitExceeded()
+
+    def raising_recorder(session: Session, **kwargs: object) -> None:
+        raise RuntimeError("simulated marker DB failure")
+
+    monkeypatch.setattr("app.evals.tasks.run_eval_suite", raising_suite)
+    monkeypatch.setattr(
+        "app.evals.tasks.record_eval_suite_timeout", raising_recorder
+    )
+    monkeypatch.setattr("app.evals.tasks.SessionLocal", session_factory)
+
+    with pytest.raises(SoftTimeLimitExceeded):
+        run_eval_suite_task.run(eval_run_id="evalrun_timeout_cleanup_fails")

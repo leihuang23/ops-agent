@@ -57,7 +57,9 @@ This is a portfolio demo with synthetic data. Its public surface is read-only; a
 
 ### Unbounded consumption
 
-- Mutation/search rate limits use Redis-backed SlowAPI rules.
+- Mutation/search rate limits use Redis-backed SlowAPI rules. Note the effective values are
+  environment-driven: the code default is 1000/min when the variables are unset; demo and
+  local profiles set explicit budgets (`.env.example`: 10/min mutations, 60/min search).
 - LLM max tokens and timeouts are bounded in settings.
 - Celery has soft and hard task limits, and stale runs self-heal to failed.
 - Eval execution has its own token gate and runs asynchronously.

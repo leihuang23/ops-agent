@@ -45,7 +45,10 @@ class InvestigationReport(BaseModel):
     root_cause: str
     summary: str
     affected_accounts: list[ReportAffectedAccount]
-    cited_evidence: list[ReportEvidence]
+    # PRD success criterion: every final report cites retrieved evidence. The
+    # workflow already builds this from tool outputs; the schema enforces it
+    # so an evidence-free report can never be constructed.
+    cited_evidence: list[ReportEvidence] = Field(min_length=1)
     claims: list[ReportClaim] = Field(default_factory=list)
     confidence: Literal["low", "medium", "high"]
     next_actions: list[str]

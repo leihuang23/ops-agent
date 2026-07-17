@@ -172,3 +172,55 @@ def test_run_startup_bootstrap_restores_missing_phase6_snapshots_idempotently(
             )
         )
         assert fixed_snapshot_count == 2
+
+
+def test_find_missing_schema_returns_empty_for_full_schema(
+    session_factory: Callable[[], Session],
+) -> None:
+    from app.db.schema_check import find_missing_schema
+
+    with session_factory() as session:
+        assert find_missing_schema(session.get_bind()) == []
+
+
+def test_find_missing_schema_reports_missing_columns_and_tables(
+    session_factory: Callable[[], Session],
+) -> None:
+    from sqlalchemy import text
+
+    from app.db.schema_check import find_missing_schema
+
+    with session_factory() as session:
+        session.execute(text("ALTER TABLE tools DROP COLUMN created_at"))
+        session.execute(text("DROP TABLE model_usage"))
+        session.commit()
+        missing = find_missing_schema(session.get_bind())
+
+    assert "column tools.created_at is missing" in missing
+    assert "table model_usage is missing" in missing
+
+
+def test_run_startup_bootstrap_fails_fast_on_schema_drift(
+    session_factory: Callable[[], Session],
+    monkeypatch,
+) -> None:
+    """A volume stamped by a divergent branch migration leaves alembic_version
+    at head while the schema is behind the models. Bootstrap must fail fast
+    with an actionable message instead of crashing in ORM code."""
+    from sqlalchemy import text
+
+    with session_factory() as session:
+        session.execute(text("ALTER TABLE tools DROP COLUMN created_at"))
+        session.execute(text("ALTER TABLE tools DROP COLUMN updated_at"))
+        session.commit()
+        monkeypatch.setattr("app.bootstrap.engine", session.get_bind())
+    monkeypatch.setattr("app.bootstrap.SessionLocal", session_factory)
+    # Migrations "succeed" as a no-op because alembic_version already says head.
+    monkeypatch.setattr("app.bootstrap.run_migrations", lambda: None)
+
+    with pytest.raises(SystemExit) as excinfo:
+        run_startup_bootstrap()
+
+    message = str(excinfo.value)
+    assert "tools.created_at" in message
+    assert "alembic stamp" in message
