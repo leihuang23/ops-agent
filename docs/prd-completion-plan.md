@@ -7,7 +7,7 @@
 
 ## Goal
 
-Complete the local MVP contract in `prd.md` for the SaaS Revenue and Support Ops Agent, with evidence that the implemented app satisfies the PRD success criteria and exposes the listed API surface.
+Complete the local MVP contract in `prd.md` for Ledger, the SaaS revenue and support operations agent, with evidence that the implemented app satisfies the PRD success criteria and exposes the listed API surface.
 
 ## Acceptance Criteria
 

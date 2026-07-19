@@ -334,7 +334,7 @@ def _start_langfuse_trace(
             environment=settings.app_env,
         )
         root_context = client.start_as_current_observation(
-            name="Ops Agent Investigation",
+            name="Ledger Investigation",
         )
         root_observation = root_context.__enter__()
         _safe_update_langfuse_observation(
@@ -417,7 +417,7 @@ def _start_langsmith_trace(
             timeout_ms=settings.observability_timeout_seconds * 1000,
         )
         run_tree = RunTree(
-            name="Ops Agent Investigation",
+            name="Ledger Investigation",
             run_type="chain",
             inputs=_trace_payload(
                 settings.observability_full_payloads,

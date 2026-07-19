@@ -151,9 +151,9 @@ def test_every_registered_tool_can_be_attached_to_a_version(client: TestClient) 
     tool_ids = [tool["id"] for tool in client.get("/tools").json()["tools"]]
 
     response = client.post(
-        "/agents/revenue-ops-agent/versions",
+        "/agents/ledger/versions",
         json={
-            "fork_from_version_id": "revenue-ops-agent_v1",
+            "fork_from_version_id": "ledger_v1",
             "enabled_tool_ids": tool_ids,
             "allowed_scopes": [
                 "read_data",
@@ -200,7 +200,7 @@ def test_register_tool_fails_closed_in_demo_without_operator_token(
 def test_run_eval_scope_is_enforced_by_the_existing_runtime_policy() -> None:
     version = AgentVersion(
         id="eval-policy-version",
-        agent_id="revenue-ops-agent",
+        agent_id="ledger",
         status="published",
         model="gpt-4o-mini",
         enabled_tool_ids=["run_eval"],

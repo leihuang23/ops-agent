@@ -112,8 +112,8 @@ def test_langfuse_provider_records_child_spans_and_trace_url(monkeypatch) -> Non
     assert client.public_key == "pk_test"
     assert client.secret_key == "sk_test"
     assert client.timeout == 2
-    assert client.started == ["Ops Agent Investigation", "query_revenue_metrics"]
-    assert client.closed == ["query_revenue_metrics", "Ops Agent Investigation"]
+    assert client.started == ["Ledger Investigation", "query_revenue_metrics"]
+    assert client.closed == ["query_revenue_metrics", "Ledger Investigation"]
     assert client.flushed is True
 
 
@@ -334,7 +334,7 @@ def test_langsmith_provider_uses_explicit_client_settings(monkeypatch) -> None:
         langsmith_api_key="lsv2_test",
         langsmith_endpoint="https://smith-api.example.test",
         langsmith_web_url="https://smith-web.example.test",
-        langsmith_project="ops-agent-ci",
+        langsmith_project="ledger-ci",
         observability_timeout_seconds=3,
     )
 
@@ -352,7 +352,7 @@ def test_langsmith_provider_uses_explicit_client_settings(monkeypatch) -> None:
     assert client.web_url == "https://smith-web.example.test"
     assert client.timeout_ms == 3000
     assert run_tree.ls_client is client
-    assert run_tree.project_name == "ops-agent-ci"
+    assert run_tree.project_name == "ledger-ci"
     assert run_tree.inputs["payload_type"] == "dict"
     assert trace.provider == "langsmith"
     assert trace.metadata["endpoint"] == "https://smith-api.example.test"

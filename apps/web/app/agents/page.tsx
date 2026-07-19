@@ -60,7 +60,7 @@ export default async function AgentsPage({
         {!mutationsEnabled ? <ReadOnlyOperatorNotice className="report-panel-wide" /> : null}
         <form action={createAgentAction} className="form-stack">
           <label className="field-label">
-            <span>Agent ID (slug, e.g. revenue-ops-agent)</span>
+            <span>Agent ID (slug, e.g. ledger)</span>
             <input
               type="text"
               name="id"
@@ -69,7 +69,7 @@ export default async function AgentsPage({
               pattern="[a-z][a-z0-9]*(?:-[a-z0-9]+)*"
               minLength={3}
               maxLength={64}
-              placeholder="revenue-ops-agent"
+              placeholder="ledger"
               disabled={!mutationsEnabled}
             />
           </label>
@@ -81,7 +81,7 @@ export default async function AgentsPage({
               className="field-input"
               required
               maxLength={120}
-              placeholder="Revenue Ops Agent"
+              placeholder="Ledger"
               disabled={!mutationsEnabled}
             />
           </label>

@@ -22,7 +22,7 @@ type IncidentPageProps = {
   }>;
 };
 
-const DEFAULT_AGENT_ID = 'revenue-ops-agent';
+const DEFAULT_AGENT_ID = 'ledger';
 
 type PublishedVersionLike = {
   id: string;

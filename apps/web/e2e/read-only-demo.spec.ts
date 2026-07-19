@@ -7,7 +7,7 @@ test.describe('public read-only demo', () => {
   );
 
   test('disables mutations while preserving review-only navigation', async ({ page }) => {
-    await page.goto('/agents/revenue-ops-agent/versions/revenue-ops-agent_phase6');
+    await page.goto('/agents/ledger/versions/ledger_phase6');
 
     await expect(page.getByText(/public read-only demo/i).first()).toBeVisible();
     await expect(page.getByRole('button', { name: 'New draft from this version' })).toBeDisabled();

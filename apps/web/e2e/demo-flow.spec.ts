@@ -4,7 +4,7 @@ test.describe('demo flow', () => {
   test('dashboard → incident → run → approval → eval report', async ({ page }) => {
     test.setTimeout(180000);
     await page.goto('/');
-    await expect(page).toHaveTitle(/Ops Agent/);
+    await expect(page).toHaveTitle(/Ledger/);
     await expect(page.locator('text=Detected revenue anomalies')).toBeVisible();
 
     // Navigate from dashboard to an incident.

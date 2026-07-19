@@ -13,7 +13,7 @@ CELERY_TASK_SOFT_TIME_LIMIT = 540
 def make_celery_app() -> Celery:
     settings = get_settings()
     app = Celery(
-        "ops_agent",
+        "ledger",
         broker=settings.celery_broker_url,
         backend=settings.celery_result_backend,
         include=["app.agent.tasks", "app.evals.tasks", "app.runs.tasks"],

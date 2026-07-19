@@ -22,7 +22,7 @@ def _version(
     """Build a detached AgentVersion for unit-testing the pure policy."""
     return AgentVersion(
         id="test-version",
-        agent_id="revenue-ops-agent",
+        agent_id="ledger",
         version_number=1,
         semantic_version="1.0.0",
         status="published",
@@ -96,7 +96,7 @@ def test_can_call_tool_treats_none_fields_as_empty() -> None:
     """A version with None enabled_tool_ids / allowed_scopes does not raise."""
     version = AgentVersion(
         id="test-version",
-        agent_id="revenue-ops-agent",
+        agent_id="ledger",
         version_number=1,
         semantic_version="1.0.0",
         status="published",

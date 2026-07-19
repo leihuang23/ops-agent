@@ -8,7 +8,7 @@ This record maps the Project 2 success criteria to durable evidence. Test counts
 
 | Criterion | Evidence |
 | --- | --- |
-| S-1 — Revenue Ops Agent is registered and runnable | `apps/web/e2e/control-plane-run.spec.ts`; control-plane run API tests |
+| S-1 — Ledger is registered and runnable | `apps/web/e2e/control-plane-run.spec.ts`; control-plane run API tests |
 | S-2 — Tool permissions visible and enforced | tool policy tests, blocked-step tests, `/tools`, and published version UI |
 | S-3 — High-risk actions are approval-gated | approval behavior tests and `apps/web/e2e/demo-flow.spec.ts` |
 | S-4 — Versions can be compared | Phase 5 eval tests and `apps/web/e2e/phase5-studio.spec.ts` |
@@ -36,7 +36,7 @@ Fresh local results from July 10, 2026:
 
 ## Three-run database audit
 
-The following `revenue-ops-agent_phase6` runs were reconstructed with one read-only SQL query, without using application logs:
+The following `ledger_phase6` runs were reconstructed with one read-only SQL query, without using application logs:
 
 | Run | Scenario | Steps / tools | Claims / evidence | Actions / approvals |
 | --- | --- | --- | --- | --- |
@@ -48,7 +48,7 @@ All three rows also proved a published immutable version reference, non-empty in
 
 ## Five-minute UAT
 
-The reproducible route and narration are in `docs/demo-script.md`; the generated recording is `docs/assets/ops-agent-walkthrough.webm`. The inspected recording is `195.8` seconds and completes the problem → version/tools → run evidence → approval boundary → observability → eval regression route inside the five-minute limit.
+The reproducible route and narration are in `docs/demo-script.md`; the generated recording is `docs/assets/ledger-walkthrough.webm`. The inspected recording is `195.8` seconds and completes the problem → version/tools → run evidence → approval boundary → observability → eval regression route inside the five-minute limit.
 
 ## Final portfolio checklist
 

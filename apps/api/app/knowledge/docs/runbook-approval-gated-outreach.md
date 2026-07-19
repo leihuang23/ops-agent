@@ -8,7 +8,7 @@ updated_at: 2026-05-15
 ---
 # Approval-Gated Outreach Runbook
 
-All Slack, email, CRM, and task actions are mock actions in the first version of Ops Agent. The agent may draft a follow-up, but it must never mark it as sent.
+All Slack, email, CRM, and task actions are mock actions in the first version of Ledger. The agent may draft a follow-up, but it must never mark it as sent.
 
 ## Required Fields
 

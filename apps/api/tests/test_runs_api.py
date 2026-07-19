@@ -1161,7 +1161,7 @@ def test_executor_refuses_to_execute_draft_agent_version(
         now = utcnow_naive()
         session.add(
             AgentVersion(
-                id="revenue-ops-agent_draft_test",
+                id="ledger_draft_test",
                 agent_id=DEFAULT_AGENT_ID,
                 version_number=None,
                 semantic_version=None,
@@ -1180,7 +1180,7 @@ def test_executor_refuses_to_execute_draft_agent_version(
             session,
             run_id="run_pointed_at_draft",
             status="queued",
-            agent_version_id="revenue-ops-agent_draft_test",
+            agent_version_id="ledger_draft_test",
             incident_id=SEEDED_INCIDENT_ID,
         )
 

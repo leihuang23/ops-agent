@@ -31,7 +31,7 @@ export function Nav() {
     <nav className="global-nav" aria-label="Primary">
       <div className="global-nav-inner">
         <Link href="/" className="global-nav-brand">
-          Ops Agent
+          Ledger
         </Link>
         <ul className="global-nav-list">
           {navItems.map((item) => {

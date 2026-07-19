@@ -41,32 +41,32 @@ def test_settings_parse_plain_cors_origin_env(monkeypatch) -> None:
 def test_settings_parse_comma_separated_cors_origins_env(monkeypatch) -> None:
     monkeypatch.setenv(
         "BACKEND_CORS_ORIGINS",
-        "http://localhost:3000, https://ops-agent.example.test",
+        "http://localhost:3000, https://ledger.example.test",
     )
 
     settings = Settings(_env_file=None)
 
     assert settings.backend_cors_origins == [
         "http://localhost:3000",
-        "https://ops-agent.example.test",
+        "https://ledger.example.test",
     ]
 
 
 def test_settings_normalize_managed_postgres_url_for_psycopg(monkeypatch) -> None:
     monkeypatch.setenv(
         "DATABASE_URL",
-        "postgresql://ops_agent:secret@managed-db.example.test:5432/ops_agent",
+        "postgresql://ledger:secret@managed-db.example.test:5432/ledger",
     )
 
     settings = Settings(_env_file=None)
 
     assert settings.database_url == (
-        "postgresql+psycopg://ops_agent:secret@managed-db.example.test:5432/ops_agent"
+        "postgresql+psycopg://ledger:secret@managed-db.example.test:5432/ledger"
     )
 
 
 def test_settings_preserve_explicit_sqlalchemy_database_driver(monkeypatch) -> None:
-    database_url = "postgresql+psycopg://ops_agent:secret@db.example.test/ops_agent"
+    database_url = "postgresql+psycopg://ledger:secret@db.example.test/ledger"
     monkeypatch.setenv("DATABASE_URL", database_url)
 
     settings = Settings(_env_file=None)

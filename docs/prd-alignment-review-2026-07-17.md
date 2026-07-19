@@ -46,7 +46,7 @@ operational robustness gap (no startup schema-drift detection). See F-1 and R-1/
      setup issue — demo mode requires `DEMO_OPERATOR_TOKEN` in the spec environment; with it
      exported, the spec passes in ~1 s.
 3. **Live verification** on the full Docker stack (`APP_ENV=demo`, tokens set) against a
-   scratch database (`ops_agent_review`; the user's drifted volume was left untouched —
+   scratch database (`ledger_review`; the user's drifted volume was left untouched —
    see F-1). Seed counts confirmed canonical: 60 accounts, 300 users, 60 subscriptions,
    600 invoices, 6000 product events, 240 tickets, 24 knowledge docs, 6 incidents, 6 eval
    cases, 1 agent, 5 agent versions, 7 tools, 1 eval dataset.
@@ -124,7 +124,7 @@ All present **except Tailwind + shadcn/ui**:
 | FR-16 Result persistence | ✅ | **Live**: per-case `root_cause_score`, `citation_quality_score`, `action_safety_score`, `latency_ms`, `cost_estimate_usd`, `trace_url`, `failure_reasons`, `example_output`; filters by version/dataset work |
 | FR-17 Version comparison | ✅ | **Live**: `compare?version_a=phase6&version_b=phase6_degraded` → pass rates 1.0 vs 0.8333 and `regressions: [eval_usage_drop_after_import_outage]`; UI has regression banner + row highlighting |
 | FR-18 Per-run observability | ✅ | Run detail exposes status, version, input payload, steps w/ per-step `model_usage`, trace link, tokens, cost, final report |
-| FR-19 Aggregate dashboard | ✅ | **Live**: `/dashboard/agents/revenue-ops-agent` returns per-version runs, success rate, avg/p95 latency, avg/total cost, last run |
+| FR-19 Aggregate dashboard | ✅ | **Live**: `/dashboard/agents/ledger` returns per-version runs, success rate, avg/p95 latency, avg/total cost, last run |
 | FR-20 Model usage tracking | ✅ | `model_usage` table; per-step attribution via `AgentRunStep.model_usage_id` (plain column, not FK — documented) |
 | FR-21 Token gating | ✅ | **Live 403s** on every new mutating route without token; dual operator/eval token accepted on dataset runs; fail-closed + `compare_digest` |
 
@@ -135,9 +135,9 @@ All present **except Tailwind + shadcn/ui**:
   NOT NULL (stricter than §9.2's "nullable"); `eval_results.trace_url` is surfaced via the
   parent run rather than a column; `tool_permissions` normalization intentionally omitted
   per the PRD's own v1 recommendation.
-- Seeds verified live: `revenue-ops-agent` + published `revenue-ops-agent_v1` (4 tools,
-  3 scopes), `revenue-ops-agent_phase6` (7 tools, 4 scopes), intentionally degraded
-  `revenue-ops-agent_phase6_degraded` (`search_docs` removed, negative version number), and
+- Seeds verified live: `ledger` + published `ledger_v1` (4 tools,
+  3 scopes), `ledger_phase6` (7 tools, 4 scopes), intentionally degraded
+  `ledger_phase6_degraded` (`search_docs` removed, negative version number), and
   `mrr-drop-suite` with 6 cases.
 
 ### 4.3 Success metrics (§11)
@@ -227,12 +227,12 @@ Priority order; R-1/R-2 address the only issue that actually broke a running sys
 ## 8. Reproduction notes for this review's live session
 
 - Stack was run as: `APP_ENV=demo DEMO_OPERATOR_TOKEN=… EVAL_RUN_TOKEN=…
-  DOCUMENT_INGEST_TOKEN=… DATABASE_URL=postgresql+psycopg://ops_agent:ops_agent@postgres:5432/ops_agent_review
+  DOCUMENT_INGEST_TOKEN=… DATABASE_URL=postgresql+psycopg://ledger:ledger@postgres:5432/ledger_review
   docker-compose up -d`, after one-off seeding via
   `docker-compose run --rm -e ALLOW_UNSAFE_BOOTSTRAP_SEED=true api python -m app.bootstrap`
   (the seed allowlist in `seed.py:1278-1295` correctly refused the non-standard DB name
   until the explicit override — guard verified working).
-- The user's original `ops_agent` database was not modified by this review.
+- The user's original `ledger` database was not modified by this review.
 - Playwright in demo mode needs `DEMO_OPERATOR_TOKEN` exported for the API-driving specs.
 
 ---

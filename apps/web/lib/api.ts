@@ -890,7 +890,7 @@ export async function getHealth(): Promise<HealthResponse> {
   } catch {
     return {
       status: 'unavailable',
-      service: 'ops-agent-api',
+      service: 'ledger-api',
       version: 'unknown',
     };
   }

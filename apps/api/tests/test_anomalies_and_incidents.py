@@ -24,7 +24,7 @@ from app.seed import reseed_database
 @pytest.fixture()
 def session_factory(tmp_path) -> Generator[Callable[[], Session], None, None]:
     engine = create_engine(
-        f"sqlite:///{tmp_path / 'ops_agent_test.db'}",
+        f"sqlite:///{tmp_path / 'ledger_test.db'}",
         connect_args={"check_same_thread": False},
     )
     TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)

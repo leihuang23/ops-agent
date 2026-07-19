@@ -210,7 +210,7 @@ def test_latest_legacy_eval_results_ignore_phase5_dataset_runs(
             session,
             eval_run_id="evalrun_phase5_newer",
             dataset_id="mrr-drop-suite",
-            agent_version_id="revenue-ops-agent_phase6_degraded",
+            agent_version_id="ledger_phase6_degraded",
         )
 
         latest = list_latest_eval_results(session)

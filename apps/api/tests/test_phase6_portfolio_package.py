@@ -66,6 +66,6 @@ def test_phase6_hiring_package_contains_required_artifacts() -> None:
         "docs/phase-6-signoff.md",
         "docs/assets/control-plane-dashboard.png",
         "docs/assets/eval-regression.png",
-        "docs/assets/ops-agent-walkthrough.webm",
+        "docs/assets/ledger-walkthrough.webm",
     ):
         assert ROOT.joinpath(path).is_file(), path

@@ -51,7 +51,7 @@ from app.seed import (
 @pytest.fixture()
 def session_factory(tmp_path) -> Generator[Callable[[], Session], None, None]:
     engine = create_engine(
-        f"sqlite:///{tmp_path / 'ops_agent_test.db'}",
+        f"sqlite:///{tmp_path / 'ledger_test.db'}",
         connect_args={"check_same_thread": False},
     )
     Base.metadata.create_all(engine)
@@ -83,10 +83,10 @@ def test_ensure_seeded_if_empty_seeds_blank_database(
         assert result is not None
         assert result.counts["accounts"] == 60
         assert result.counts["product_events"] == 6000
-        phase6 = session.get(AgentVersion, "revenue-ops-agent_phase6")
+        phase6 = session.get(AgentVersion, "ledger_phase6")
         assert phase6 is not None
         assert phase6.status == "published"
-        assert phase6.forked_from_version_id == "revenue-ops-agent_v1"
+        assert phase6.forked_from_version_id == "ledger_v1"
 
 
 def test_ensure_seeded_if_empty_refuses_production_environment(
@@ -95,7 +95,7 @@ def test_ensure_seeded_if_empty_refuses_production_environment(
 ) -> None:
     monkeypatch.setenv(
         "DATABASE_URL",
-        "postgresql+psycopg://ops_agent:ops_agent@postgres:5432/ops_agent",
+        "postgresql+psycopg://ledger:ledger@postgres:5432/ledger",
     )
     monkeypatch.setenv("APP_ENV", "production")
     get_settings.cache_clear()
@@ -115,7 +115,7 @@ def test_ensure_seeded_if_empty_refuses_unsafe_remote_database(
 ) -> None:
     monkeypatch.setenv(
         "DATABASE_URL",
-        "postgresql+psycopg://ops_agent:ops_agent@prod.example.com:5432/ops_agent",
+        "postgresql+psycopg://ledger:ledger@prod.example.com:5432/ledger",
     )
     get_settings.cache_clear()
     try:
@@ -133,7 +133,7 @@ def test_ensure_seeded_if_empty_allows_remote_database_when_explicitly_overridde
 ) -> None:
     monkeypatch.setenv(
         "DATABASE_URL",
-        "postgresql+psycopg://ops_agent:ops_agent@prod.example.com:5432/ops_agent",
+        "postgresql+psycopg://ledger:ledger@prod.example.com:5432/ledger",
     )
     monkeypatch.setenv("ALLOW_UNSAFE_BOOTSTRAP_SEED", "true")
     get_settings.cache_clear()
@@ -751,27 +751,27 @@ def test_individual_metric_endpoints_return_reviewable_contracts(
 
 def test_seed_cli_refuses_unsafe_database_targets() -> None:
     validate_seed_target(
-        "postgresql+psycopg://ops_agent:ops_agent@localhost:5432/ops_agent",
+        "postgresql+psycopg://ledger:ledger@localhost:5432/ledger",
         "local",
     )
     validate_seed_target(
-        "postgresql+psycopg://postgres:test@localhost:5432/test_ops_agent",
+        "postgresql+psycopg://postgres:test@localhost:5432/test_ledger",
         "test",
     )
 
     with pytest.raises(SystemExit, match="Refusing to reseed outside local"):
         validate_seed_target(
-            "postgresql+psycopg://ops_agent:ops_agent@postgres:5432/ops_agent",
+            "postgresql+psycopg://ledger:ledger@postgres:5432/ledger",
             "production",
         )
     with pytest.raises(SystemExit, match="Refusing to reseed a non-local database target"):
         validate_seed_target(
-            "postgresql+psycopg://ops_agent:ops_agent@db.example.com:5432/prod",
+            "postgresql+psycopg://ledger:ledger@db.example.com:5432/prod",
             "local",
         )
     with pytest.raises(SystemExit, match="Refusing to reseed"):
         validate_seed_target(
-            "postgresql+psycopg://ops_agent:ops_agent@db.example.com:5432/prod",
+            "postgresql+psycopg://ledger:ledger@db.example.com:5432/prod",
             "production",
         )
 

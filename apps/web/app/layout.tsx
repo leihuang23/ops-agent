@@ -4,7 +4,7 @@ import './globals.css';
 import { Nav } from './Nav';
 
 export const metadata: Metadata = {
-  title: 'Ops Agent',
+  title: 'Ledger',
   description:
     'Evidence-backed SaaS operations agent with a governed control plane and evaluation studio',
   icons: [{ rel: 'icon', url: '/favicon.svg', type: 'image/svg+xml' }],

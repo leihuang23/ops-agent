@@ -47,7 +47,7 @@ def test_populated_project1_database_upgrades_to_phase6_and_bootstraps() -> None
     then executes the same registry/seed services as startup bootstrap.
     """
     configured_url = make_url(os.environ["DATABASE_URL"])
-    database_name = f"ops_agent_upgrade_{uuid4().hex[:12]}"
+    database_name = f"ledger_upgrade_{uuid4().hex[:12]}"
     admin_url = configured_url.set(database="postgres")
     upgrade_url = configured_url.set(database=database_name)
     admin_engine = sa.create_engine(admin_url, isolation_level="AUTOCOMMIT")
@@ -97,7 +97,7 @@ def test_populated_project1_database_upgrades_to_phase6_and_bootstraps() -> None
             v1 = session.get(AgentVersion, DEFAULT_AGENT_VERSION_ID)
             phase6 = session.get(AgentVersion, PHASE6_AGENT_VERSION_ID)
             degraded = session.get(
-                AgentVersion, "revenue-ops-agent_phase6_degraded"
+                AgentVersion, "ledger_phase6_degraded"
             )
             assert v1 is not None
             assert phase6 is not None

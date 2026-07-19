@@ -14,7 +14,7 @@ This is a portfolio demo with synthetic data. Its public surface is read-only; a
 
 ### Prompt injection
 
-- The Revenue Ops Agent uses a fixed linear graph and a closed implementation registry.
+- Ledger uses a fixed linear graph and a closed implementation registry.
 - Tool inputs and outputs are typed; a retrieved document cannot introduce a new tool or callable.
 - Published versions freeze the prompt, enabled tools, and scopes used by a run.
 - Residual risk: retrieved text can still influence LLM synthesis. The deterministic fallback and citation checks reduce impact but do not replace adversarial prompt-injection evals.

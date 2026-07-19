@@ -7,12 +7,12 @@ const webBaseUrl = process.env.PLAYWRIGHT_BASE_URL ?? 'http://localhost:3000';
 const apiBaseUrl = process.env.PLAYWRIGHT_API_BASE_URL ?? 'http://localhost:8000';
 const assetsDir = resolve(process.cwd(), '../../docs/assets');
 const videoTmpDir = resolve(assetsDir, '.video-tmp');
-const videoPath = resolve(assetsDir, 'ops-agent-walkthrough.webm');
+const videoPath = resolve(assetsDir, 'ledger-walkthrough.webm');
 const screenshotPaths = {
   dashboard: resolve(assetsDir, 'control-plane-dashboard.png'),
   evals: resolve(assetsDir, 'eval-regression.png'),
 };
-const baselineVersionId = 'revenue-ops-agent_phase6';
+const baselineVersionId = 'ledger_phase6';
 
 const operatorToken = process.env.DEMO_OPERATOR_TOKEN;
 const evalToken = process.env.EVAL_RUN_TOKEN;
@@ -151,7 +151,7 @@ try {
   );
 
   await page.goto(
-    `${webBaseUrl}/agents/revenue-ops-agent/versions/${baselineVersionId}`,
+    `${webBaseUrl}/agents/ledger/versions/${baselineVersionId}`,
     { waitUntil: 'networkidle' },
   );
   await addSceneLabel(
@@ -165,7 +165,7 @@ try {
     page.waitForURL(
       (url) =>
         url.pathname !== sourceVersionPath &&
-        url.pathname.startsWith('/agents/revenue-ops-agent/versions/'),
+        url.pathname.startsWith('/agents/ledger/versions/'),
     ),
     page.getByRole('button', { name: 'New draft from this version' }).click(),
   ]);
@@ -184,7 +184,7 @@ try {
   await page.getByRole('button', { name: 'Save draft' }).click();
   await page.getByText('Draft saved successfully.').waitFor({ state: 'visible' });
   await page.getByRole('button', { name: 'Publish version' }).click();
-  await page.waitForURL(/\/agents\/revenue-ops-agent\?version_published=/);
+  await page.waitForURL(/\/agents\/ledger\?version_published=/);
 
   await scene(
     page,
@@ -195,7 +195,7 @@ try {
   );
 
   await page.goto(
-    `${webBaseUrl}/agents/revenue-ops-agent/versions/${encodeURIComponent(candidateVersionId)}`,
+    `${webBaseUrl}/agents/ledger/versions/${encodeURIComponent(candidateVersionId)}`,
     { waitUntil: 'networkidle' },
   );
   await page.locator('select[name="incident_id"]').selectOption('inc_rev_mrr_wow_drop_20260603');

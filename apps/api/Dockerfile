@@ -25,7 +25,7 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl libpq5 \
     && rm -rf /var/lib/apt/lists/* \
-    && groupadd -r opsagent && useradd -r -g opsagent opsagent
+    && groupadd -r ledger && useradd -r -g ledger ledger
 
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
@@ -34,9 +34,9 @@ COPY app ./app
 COPY alembic.ini ./alembic.ini
 COPY alembic ./alembic
 COPY entrypoint.sh ./entrypoint.sh
-RUN chmod +x ./entrypoint.sh && chown -R opsagent:opsagent /app
+RUN chmod +x ./entrypoint.sh && chown -R ledger:ledger /app
 
-USER opsagent
+USER ledger
 
 EXPOSE 8000
 

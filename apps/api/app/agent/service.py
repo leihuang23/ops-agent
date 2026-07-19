@@ -821,7 +821,7 @@ def _can_propose_report_action(
 ) -> tuple[bool, str | None]:
     """Preserve Project1 v1 action behavior without changing its snapshot.
 
-    The exact seeded ``revenue-ops-agent_v1`` snapshot predates governed action
+    The exact seeded ``ledger_v1`` snapshot predates governed action
     tool IDs, but its immutable scopes explicitly authorize mock actions and
     approval requests. Only this snapshot may use those two legacy capabilities
     by scope alone. Every other version remains subject to ``can_call_tool``'s

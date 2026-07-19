@@ -117,7 +117,7 @@ def test_run_startup_bootstrap_restores_missing_phase6_snapshots_idempotently(
 
     with session_factory() as session:
         reseed_database(session)
-        v1 = session.get(AgentVersion, "revenue-ops-agent_v1")
+        v1 = session.get(AgentVersion, "ledger_v1")
         assert v1 is not None
         v1.system_prompt = "operator-customized v1 prompt"
         v1.model = "custom-model"
@@ -126,10 +126,10 @@ def test_run_startup_bootstrap_restores_missing_phase6_snapshots_idempotently(
         v1.enabled_tool_ids = ["query_revenue_metrics"]
         v1.allowed_scopes = ["read_data"]
         session.delete(
-            session.get(AgentVersion, "revenue-ops-agent_phase6_degraded")
+            session.get(AgentVersion, "ledger_phase6_degraded")
         )
         session.flush()
-        session.delete(session.get(AgentVersion, "revenue-ops-agent_phase6"))
+        session.delete(session.get(AgentVersion, "ledger_phase6"))
         session.commit()
 
     with session_factory() as session:
@@ -141,9 +141,9 @@ def test_run_startup_bootstrap_restores_missing_phase6_snapshots_idempotently(
     run_startup_bootstrap()
 
     with session_factory() as session:
-        v1 = session.get(AgentVersion, "revenue-ops-agent_v1")
-        phase6 = session.get(AgentVersion, "revenue-ops-agent_phase6")
-        degraded = session.get(AgentVersion, "revenue-ops-agent_phase6_degraded")
+        v1 = session.get(AgentVersion, "ledger_v1")
+        phase6 = session.get(AgentVersion, "ledger_phase6")
+        degraded = session.get(AgentVersion, "ledger_phase6_degraded")
         assert v1 is not None
         assert phase6 is not None
         assert degraded is not None
@@ -165,8 +165,8 @@ def test_run_startup_bootstrap_restores_missing_phase6_snapshots_idempotently(
             .where(
                 AgentVersion.id.in_(
                     [
-                        "revenue-ops-agent_phase6",
-                        "revenue-ops-agent_phase6_degraded",
+                        "ledger_phase6",
+                        "ledger_phase6_degraded",
                     ]
                 )
             )

@@ -91,7 +91,7 @@ OBSERVABILITY_PROVIDER=langsmith
 LANGSMITH_TRACING=true
 LANGSMITH_API_KEY=<api-key>
 LANGSMITH_ENDPOINT=https://api.smith.langchain.com
-LANGSMITH_PROJECT=ops-agent-local
+LANGSMITH_PROJECT=ledger-local
 LANGSMITH_WEB_URL=https://smith.langchain.com
 ```
 

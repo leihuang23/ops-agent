@@ -25,7 +25,7 @@ jobs:
       postgres:
         image: pgvector/pgvector:pg16
         env:
-          POSTGRES_DB: test_ops_agent
+          POSTGRES_DB: test_ledger
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: test
         options: >-
@@ -64,19 +64,19 @@ jobs:
 
       - name: Run database migrations
         env:
-          DATABASE_URL: postgresql+psycopg://postgres:test@localhost:5432/test_ops_agent
+          DATABASE_URL: postgresql+psycopg://postgres:test@localhost:5432/test_ledger
           REDIS_URL: redis://localhost:6379/0
         run: alembic upgrade head
 
       - name: Run API tests
         env:
-          DATABASE_URL: postgresql+psycopg://postgres:test@localhost:5432/test_ops_agent
+          DATABASE_URL: postgresql+psycopg://postgres:test@localhost:5432/test_ledger
           REDIS_URL: redis://localhost:6379/0
         run: pytest
 
       - name: Run eval suite
         env:
-          DATABASE_URL: postgresql+psycopg://postgres:test@localhost:5432/test_ops_agent
+          DATABASE_URL: postgresql+psycopg://postgres:test@localhost:5432/test_ledger
           REDIS_URL: redis://localhost:6379/0
         run: python -m app.evals.runner --json
 

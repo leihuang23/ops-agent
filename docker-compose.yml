@@ -2,9 +2,9 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-ops_agent}
-      POSTGRES_USER: ${POSTGRES_USER:-ops_agent}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ops_agent}
+      POSTGRES_DB: ${POSTGRES_DB:-ledger}
+      POSTGRES_USER: ${POSTGRES_USER:-ledger}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ledger}
     ports:
       - "5432:5432"
     volumes:
@@ -30,7 +30,7 @@ services:
       context: ./apps/api
     environment:
       APP_ENV: ${APP_ENV:-local}
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://ops_agent:ops_agent@postgres:5432/ops_agent}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://ledger:ledger@postgres:5432/ledger}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
@@ -58,7 +58,7 @@ services:
       LANGSMITH_TRACING: ${LANGSMITH_TRACING:-false}
       LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
       LANGSMITH_ENDPOINT: ${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
-      LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-ops-agent-local}
+      LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-ledger-local}
       LANGSMITH_WEB_URL: ${LANGSMITH_WEB_URL:-https://smith.langchain.com}
     ports:
       - "8000:8000"
@@ -80,7 +80,7 @@ services:
     command: ["./entrypoint.sh", "worker"]
     environment:
       APP_ENV: ${APP_ENV:-local}
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://ops_agent:ops_agent@postgres:5432/ops_agent}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://ledger:ledger@postgres:5432/ledger}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
@@ -105,7 +105,7 @@ services:
       LANGSMITH_TRACING: ${LANGSMITH_TRACING:-false}
       LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
       LANGSMITH_ENDPOINT: ${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
-      LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-ops-agent-local}
+      LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-ledger-local}
       LANGSMITH_WEB_URL: ${LANGSMITH_WEB_URL:-https://smith.langchain.com}
     depends_on:
       api:

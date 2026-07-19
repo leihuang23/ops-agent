@@ -1,6 +1,6 @@
 # PRD-Alignment Review — 2026-07-07
 
-**Scope:** Full codebase audit of `ops-agent` (FastAPI `apps/api` + Next.js `apps/web`)
+**Scope:** Full codebase audit of `ledger` (FastAPI `apps/api` + Next.js `apps/web`)
 against `prd.md` and `AGENTS.md`.
 **Method:** Five parallel read-only deep-dives (feature completeness, stability,
 performance, UX, production readiness). Every claim below was verified by reading

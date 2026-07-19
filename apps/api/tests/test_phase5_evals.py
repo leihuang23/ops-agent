@@ -135,20 +135,20 @@ def test_run_dataset_uses_selected_published_version_and_lists_filtered_results(
 
     response = client.post(
         "/eval-datasets/mrr-drop-suite/run",
-        json={"agent_version_id": "revenue-ops-agent_phase6"},
+        json={"agent_version_id": "ledger_phase6"},
         headers={"X-Eval-Run-Token": "phase5-eval-token"},
     )
 
     assert response.status_code == 202
     accepted = response.json()
     assert accepted["dataset_id"] == "mrr-drop-suite"
-    assert accepted["agent_version_id"] == "revenue-ops-agent_phase6"
+    assert accepted["agent_version_id"] == "ledger_phase6"
     assert accepted["status"] == "queued"
 
     results_response = client.get(
         "/eval-results",
         params={
-            "agent_version_id": "revenue-ops-agent_phase6",
+            "agent_version_id": "ledger_phase6",
             "dataset_id": "mrr-drop-suite",
         },
     )
@@ -159,7 +159,7 @@ def test_run_dataset_uses_selected_published_version_and_lists_filtered_results(
         accepted["eval_run_id"]
     }
     assert all(
-        result["agent_version_id"] == "revenue-ops-agent_phase6"
+        result["agent_version_id"] == "ledger_phase6"
         and result["dataset_id"] == "mrr-drop-suite"
         and result["cost_estimate_usd"] >= 0
         and result["trace_url"]
@@ -174,7 +174,7 @@ def test_run_dataset_uses_selected_published_version_and_lists_filtered_results(
         ).all()
         assert len(persisted) == 6
         assert all(
-            result.agent_version_id == "revenue-ops-agent_phase6"
+            result.agent_version_id == "ledger_phase6"
             for result in persisted
         )
         assert all(result.dataset_id == "mrr-drop-suite" for result in persisted)
@@ -194,13 +194,13 @@ def test_compare_latest_complete_version_runs_flags_regressions(
             session,
             eval_run_id="evalrun_good",
             dataset_id="mrr-drop-suite",
-            agent_version_id="revenue-ops-agent_phase6",
+            agent_version_id="ledger_phase6",
         )
         degraded = run_eval_suite(
             session,
             eval_run_id="evalrun_degraded",
             dataset_id="mrr-drop-suite",
-            agent_version_id="revenue-ops-agent_phase6_degraded",
+            agent_version_id="ledger_phase6_degraded",
         )
 
     assert good.passed_scenarios >= 4
@@ -209,8 +209,8 @@ def test_compare_latest_complete_version_runs_flags_regressions(
     response = client.get(
         "/eval-results/compare",
         params={
-            "version_a": "revenue-ops-agent_phase6",
-            "version_b": "revenue-ops-agent_phase6_degraded",
+            "version_a": "ledger_phase6",
+            "version_b": "ledger_phase6_degraded",
             "dataset_id": "mrr-drop-suite",
         },
     )
@@ -255,7 +255,7 @@ def test_small_custom_dataset_uses_dataset_relative_completion_and_threshold(
             session,
             eval_run_id="evalrun_two_case",
             dataset_id=dataset.id,
-            agent_version_id="revenue-ops-agent_phase6",
+            agent_version_id="ledger_phase6",
         )
         rebuilt = build_eval_run_summary(session, direct.eval_run_id)
 
@@ -361,7 +361,7 @@ def test_eval_dataset_run_accepts_either_operator_or_eval_token(
         "app.evals.studio_router._enqueue_eval_dataset",
         lambda *_args: None,
     )
-    payload = {"agent_version_id": "revenue-ops-agent_phase6"}
+    payload = {"agent_version_id": "ledger_phase6"}
 
     # demo env: only the operator token is configured -> operator token alone
     # authorizes (the eval token is NOT also required).
@@ -437,9 +437,9 @@ def test_eval_dataset_run_requires_version_run_eval_permission(
     get_settings.cache_clear()
 
     draft = client.post(
-        "/agents/revenue-ops-agent/versions",
+        "/agents/ledger/versions",
         json={
-            "fork_from_version_id": "revenue-ops-agent_phase6",
+            "fork_from_version_id": "ledger_phase6",
             "enabled_tool_ids": ["run_eval"],
             "allowed_scopes": ["read_data"],
         },
@@ -447,7 +447,7 @@ def test_eval_dataset_run_requires_version_run_eval_permission(
     assert draft.status_code == 201
     version_id = draft.json()["id"]
     assert client.post(
-        f"/agents/revenue-ops-agent/versions/{version_id}/publish"
+        f"/agents/ledger/versions/{version_id}/publish"
     ).status_code == 200
 
     response = client.post(

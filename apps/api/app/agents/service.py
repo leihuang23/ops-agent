@@ -589,12 +589,12 @@ def publish_version(
     return _version_detail(version)
 
 
-DEFAULT_AGENT_ID = "revenue-ops-agent"
+DEFAULT_AGENT_ID = "ledger"
 # DEFAULT_AGENT_VERSION_ID remains the original immutable v1 snapshot. The legacy/CLI
 # eval baseline is pinned separately to PHASE6_AGENT_VERSION_ID (see app.evals.runner).
-DEFAULT_AGENT_VERSION_ID = "revenue-ops-agent_v1"
-PHASE6_AGENT_VERSION_ID = "revenue-ops-agent_phase6"
-PHASE6_DEGRADED_AGENT_VERSION_ID = "revenue-ops-agent_phase6_degraded"
+DEFAULT_AGENT_VERSION_ID = "ledger_v1"
+PHASE6_AGENT_VERSION_ID = "ledger_phase6"
+PHASE6_DEGRADED_AGENT_VERSION_ID = "ledger_phase6_degraded"
 
 
 def get_published_version(

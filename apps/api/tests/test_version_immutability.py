@@ -18,7 +18,7 @@ def _make_version(*, status: str) -> AgentVersion:
     """Build a detached AgentVersion for unit-testing the pure guard."""
     return AgentVersion(
         id="test-version",
-        agent_id="revenue-ops-agent",
+        agent_id="ledger",
         version_number=1 if status == "published" else None,
         semantic_version="1.0.0" if status == "published" else None,
         status=status,

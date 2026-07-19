@@ -1,6 +1,6 @@
 # Project 1 Run And Test Runbook
 
-This runbook covers the Week 6-ready local review path for Project 1, the SaaS Revenue and Support Ops Agent. It is written for a reviewer who wants to prove the app boots, the seeded incident scenarios are present, the agent produces cited reports, approval gates work, and the eval suite passes.
+This runbook covers the Week 6-ready local review path for Project 1, Ledger. It is written for a reviewer who wants to prove the app boots, the seeded incident scenarios are present, the agent produces cited reports, approval gates work, and the eval suite passes.
 
 Verified locally on 2026-07-06 after reading `prd.md`, `AGENTS.md`, and the current implementation.
 
@@ -34,9 +34,9 @@ error getting credentials - err: exec: "docker-credential-osxkeychain": executab
 use a temporary Docker config for public image pulls:
 
 ```bash
-mkdir -p /private/tmp/ops-agent-docker-config
-printf '{}' > /private/tmp/ops-agent-docker-config/config.json
-export DOCKER_CONFIG=/private/tmp/ops-agent-docker-config
+mkdir -p /private/tmp/ledger-docker-config
+printf '{}' > /private/tmp/ledger-docker-config/config.json
+export DOCKER_CONFIG=/private/tmp/ledger-docker-config
 ```
 
 If local curl tries to use a dead proxy, add `--noproxy '*'` to localhost checks.
@@ -173,13 +173,13 @@ curl --noproxy '*' http://localhost:8000/evals/results
 Expected health:
 
 ```json
-{"status":"ok","service":"ops-agent-api","version":"0.1.0"}
+{"status":"ok","service":"ledger-api","version":"0.1.0"}
 ```
 
 Expected readiness includes:
 
 ```json
-{"status":"ok","service":"ops-agent-api","version":"0.1.0","postgres":"ok","redis":"ok"}
+{"status":"ok","service":"ledger-api","version":"0.1.0","postgres":"ok","redis":"ok"}
 ```
 
 If a dependency is down, `/ready` returns HTTP 503 with the failing check marked

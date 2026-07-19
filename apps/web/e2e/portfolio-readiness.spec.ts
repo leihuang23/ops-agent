@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 const apiBaseUrl = process.env.PLAYWRIGHT_API_BASE_URL ?? 'http://localhost:8000';
-const baselineVersionId = 'revenue-ops-agent_phase6';
+const baselineVersionId = 'ledger_phase6';
 
 test.describe.serial('Phase 6 portfolio readiness', () => {
   // This suite mutates one shared portfolio environment across tests. Retrying a
@@ -14,13 +14,13 @@ test.describe.serial('Phase 6 portfolio readiness', () => {
   test('publish a governed version and expose its blocked tool step', async ({ page, request }) => {
     test.setTimeout(180000);
 
-    await page.goto(`/agents/revenue-ops-agent/versions/${baselineVersionId}`);
+    await page.goto(`/agents/ledger/versions/${baselineVersionId}`);
     const sourcePath = new URL(page.url()).pathname;
     await Promise.all([
       page.waitForURL(
         (url) =>
           url.pathname !== sourcePath &&
-          url.pathname.startsWith('/agents/revenue-ops-agent/versions/'),
+          url.pathname.startsWith('/agents/ledger/versions/'),
       ),
       page.getByRole('button', { name: 'New draft from this version' }).click(),
     ]);
@@ -37,9 +37,9 @@ test.describe.serial('Phase 6 portfolio readiness', () => {
     await expect(page.getByText('Draft saved successfully.')).toBeVisible();
 
     await page.getByRole('button', { name: 'Publish version' }).click();
-    await page.waitForURL(/\/agents\/revenue-ops-agent\?version_published=/);
+    await page.waitForURL(/\/agents\/ledger\?version_published=/);
 
-    await page.goto(`/agents/revenue-ops-agent/versions/${versionId}`);
+    await page.goto(`/agents/ledger/versions/${versionId}`);
     await expect(page.getByText('published', { exact: true }).first()).toBeVisible();
     await page.locator('select[name="incident_id"]').selectOption('inc_eval_enterprise_churn_wave');
     await page.getByRole('button', { name: 'Launch run' }).click();

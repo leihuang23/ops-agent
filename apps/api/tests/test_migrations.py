@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 import app.models  # noqa: F401
 from app.db.base import Base
-from app.models import AgentRun, AgentVersion, EvalCase, EvalResult
+from app.models import Agent, AgentRun, AgentVersion, EvalCase, EvalResult
 from app.seed import insert_seed_data
 
 MIGRATION_PATH = (
@@ -48,6 +48,12 @@ TOOL_TIMESTAMPS_MIGRATION_PATH = (
     / "alembic"
     / "versions"
     / "20260710_0016_tool_timestamps_and_scope_check.py"
+)
+LEDGER_RENAME_MIGRATION_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "alembic"
+    / "versions"
+    / "20260719_0017_rename_default_agent_to_ledger.py"
 )
 
 
@@ -818,6 +824,13 @@ def _build_upgraded_tool_registry_database(tmp_path, name: str) -> Engine:
     Base.metadata.create_all(engine)
     with Session(engine) as session:
         insert_seed_data(session)
+    _run_in_migration_context(
+        engine,
+        "downgrade",
+        path=LEDGER_RENAME_MIGRATION_PATH,
+        module_name="migration_20260719_0017_rename_default_agent_to_ledger",
+    )
+    with Session(engine) as session:
         session.execute(
             sa.delete(AgentVersion).where(
                 AgentVersion.id == "revenue-ops-agent_phase6_degraded"
@@ -964,6 +977,13 @@ def test_tool_registry_downgrade_removes_unreferenced_bootstrap_owned_snapshots(
     Base.metadata.create_all(engine)
     with Session(engine) as session:
         insert_seed_data(session)
+    _run_in_migration_context(
+        engine,
+        "downgrade",
+        path=LEDGER_RENAME_MIGRATION_PATH,
+        module_name="migration_20260719_0017_rename_default_agent_to_ledger",
+    )
+    with Session(engine) as session:
         assert (
             session.get(AgentVersion, "revenue-ops-agent_phase6").published_by
             == "bootstrap:phase6"
@@ -1125,4 +1145,124 @@ def test_tool_timestamps_migration_downgrade_drops_columns_and_constraint(
                 "'app.test')"
             )
         )
+    engine.dispose()
+
+
+def test_ledger_rename_migration_rekeys_default_agent_and_references(tmp_path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'ledger_rename_migration.db'}")
+    Base.metadata.create_all(engine)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    with Session(engine) as session:
+        session.add(
+            Agent(
+                id="revenue-ops-agent",
+                name="Revenue Ops Agent",
+                description="Control-plane revenue and support operations agent.",
+                default_model="gpt-4o-mini",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        session.add_all(
+            [
+                AgentVersion(
+                    id="revenue-ops-agent_v1",
+                    agent_id="revenue-ops-agent",
+                    version_number=1,
+                    semantic_version="1.0.0",
+                    status="published",
+                    system_prompt="",
+                    model="gpt-4o-mini",
+                    temperature=0.1,
+                    max_tokens=1024,
+                    enabled_tool_ids=["query_revenue_metrics"],
+                    allowed_scopes=["read_data"],
+                    published_at=now,
+                    published_by="migration",
+                    created_at=now,
+                    updated_at=now,
+                ),
+                AgentVersion(
+                    id="revenue-ops-agent_phase6",
+                    agent_id="revenue-ops-agent",
+                    version_number=2,
+                    semantic_version="2.0.0",
+                    status="published",
+                    system_prompt="",
+                    model="gpt-4o-mini",
+                    temperature=0.1,
+                    max_tokens=1024,
+                    enabled_tool_ids=["query_revenue_metrics", "run_eval"],
+                    allowed_scopes=["read_data", "run_eval"],
+                    forked_from_version_id="revenue-ops-agent_v1",
+                    published_at=now,
+                    published_by="migration:20260710_0015",
+                    created_at=now,
+                    updated_at=now,
+                ),
+            ]
+        )
+        session.flush()
+        session.add(
+            AgentRun(
+                id="run_before_ledger",
+                incident_id=None,
+                agent_id="revenue-ops-agent",
+                agent_version_id="revenue-ops-agent_phase6",
+                status="succeeded",
+                trace_metadata={},
+                input_payload={},
+                token_estimate=0,
+                prompt_tokens=0,
+                completion_tokens=0,
+                cost_estimate_usd=0.0,
+                started_at=now,
+                completed_at=now,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        session.commit()
+
+    _run_in_migration_context(
+        engine,
+        "upgrade",
+        path=LEDGER_RENAME_MIGRATION_PATH,
+        module_name="migration_20260719_0017_rename_default_agent_to_ledger",
+    )
+
+    with Session(engine) as session:
+        ledger = session.get(Agent, "ledger")
+        assert ledger is not None
+        assert ledger.name == "Ledger"
+        assert session.get(Agent, "revenue-ops-agent") is None
+        assert session.get(AgentVersion, "ledger_v1") is not None
+        phase6 = session.get(AgentVersion, "ledger_phase6")
+        assert phase6 is not None
+        assert phase6.agent_id == "ledger"
+        assert phase6.forked_from_version_id == "ledger_v1"
+        run = session.get(AgentRun, "run_before_ledger")
+        assert run is not None
+        assert run.agent_id == "ledger"
+        assert run.agent_version_id == "ledger_phase6"
+
+    _run_in_migration_context(
+        engine,
+        "downgrade",
+        path=LEDGER_RENAME_MIGRATION_PATH,
+        module_name="migration_20260719_0017_rename_default_agent_to_ledger",
+    )
+
+    with Session(engine) as session:
+        legacy = session.get(Agent, "revenue-ops-agent")
+        assert legacy is not None
+        assert legacy.name == "Revenue Ops Agent"
+        assert session.get(Agent, "ledger") is None
+        assert session.get(AgentVersion, "revenue-ops-agent_v1") is not None
+        run = session.get(AgentRun, "run_before_ledger")
+        assert run is not None
+        assert run.agent_id == "revenue-ops-agent"
+        assert run.agent_version_id == "revenue-ops-agent_phase6"
+
     engine.dispose()

@@ -26,7 +26,7 @@ test.describe('failure flow', () => {
         : undefined,
       data: {
         incident_id: 'inc_eval_unknown_root_cause',
-        agent_version_id: 'revenue-ops-agent_phase6',
+        agent_version_id: 'ledger_phase6',
         run_inline: true,
         force: true,
       },

@@ -1003,7 +1003,7 @@ def test_disabled_tools_do_not_create_metric_evidence(
     client = TestClient(app)
     try:
         version_resp = client.post(
-            "/agents/revenue-ops-agent/versions",
+            "/agents/ledger/versions",
             json={
                 "enabled_tool_ids": [
                     "fetch_account_details",
@@ -1014,7 +1014,7 @@ def test_disabled_tools_do_not_create_metric_evidence(
         assert version_resp.status_code == 201
         version_id = version_resp.json()["id"]
         publish_resp = client.post(
-            f"/agents/revenue-ops-agent/versions/{version_id}/publish"
+            f"/agents/ledger/versions/{version_id}/publish"
         )
         assert publish_resp.status_code == 200
         response = client.post(
@@ -1097,7 +1097,7 @@ def test_disabled_context_tools_create_tool_evidence(
     client = TestClient(app)
     try:
         version_resp = client.post(
-            "/agents/revenue-ops-agent/versions",
+            "/agents/ledger/versions",
             json={
                 "enabled_tool_ids": [
                     "query_revenue_metrics",
@@ -1108,7 +1108,7 @@ def test_disabled_context_tools_create_tool_evidence(
         assert version_resp.status_code == 201
         version_id = version_resp.json()["id"]
         publish_resp = client.post(
-            f"/agents/revenue-ops-agent/versions/{version_id}/publish"
+            f"/agents/ledger/versions/{version_id}/publish"
         )
         assert publish_resp.status_code == 200
         response = client.post(
@@ -1158,7 +1158,7 @@ def test_single_disabled_context_tool_is_cited_by_a_claim(
     client = TestClient(app)
     try:
         version_resp = client.post(
-            "/agents/revenue-ops-agent/versions",
+            "/agents/ledger/versions",
             json={
                 "enabled_tool_ids": [
                     "query_revenue_metrics",
@@ -1170,7 +1170,7 @@ def test_single_disabled_context_tool_is_cited_by_a_claim(
         assert version_resp.status_code == 201
         version_id = version_resp.json()["id"]
         publish_resp = client.post(
-            f"/agents/revenue-ops-agent/versions/{version_id}/publish"
+            f"/agents/ledger/versions/{version_id}/publish"
         )
         assert publish_resp.status_code == 200
         response = client.post(
@@ -1217,7 +1217,7 @@ def test_disabled_account_details_tool_is_cited_by_report(
     client = TestClient(app)
     try:
         version_resp = client.post(
-            "/agents/revenue-ops-agent/versions",
+            "/agents/ledger/versions",
             json={
                 "enabled_tool_ids": [
                     "query_revenue_metrics",
@@ -1229,7 +1229,7 @@ def test_disabled_account_details_tool_is_cited_by_report(
         assert version_resp.status_code == 201
         version_id = version_resp.json()["id"]
         publish_resp = client.post(
-            f"/agents/revenue-ops-agent/versions/{version_id}/publish"
+            f"/agents/ledger/versions/{version_id}/publish"
         )
         assert publish_resp.status_code == 200
         response = client.post(
@@ -1421,13 +1421,13 @@ def test_default_version_idempotency_key_is_stable_across_new_publish(
             },
         )
         version_resp = client.post(
-            "/agents/revenue-ops-agent/versions",
+            "/agents/ledger/versions",
             json={"system_prompt": "New default after first request"},
         )
         assert version_resp.status_code == 201
         version_id = version_resp.json()["id"]
         publish_resp = client.post(
-            f"/agents/revenue-ops-agent/versions/{version_id}/publish"
+            f"/agents/ledger/versions/{version_id}/publish"
         )
         assert publish_resp.status_code == 200
         second = client.post(
@@ -1479,7 +1479,7 @@ def test_idempotency_key_does_not_reuse_different_agent_version(
     client = TestClient(app)
     try:
         version_resp = client.post(
-            "/agents/revenue-ops-agent/versions",
+            "/agents/ledger/versions",
             json={
                 "system_prompt": "Different version",
                 "enabled_tool_ids": [
@@ -1493,7 +1493,7 @@ def test_idempotency_key_does_not_reuse_different_agent_version(
         assert version_resp.status_code == 201
         version_id = version_resp.json()["id"]
         publish_resp = client.post(
-            f"/agents/revenue-ops-agent/versions/{version_id}/publish"
+            f"/agents/ledger/versions/{version_id}/publish"
         )
         assert publish_resp.status_code == 200
         idempotency_key = "idem-cross-version"

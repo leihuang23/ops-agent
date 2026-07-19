@@ -206,13 +206,13 @@ def test_project2_mutation_routes_fail_closed_without_operator_token(
         # 403 is the unset operator token, not a malformed request.
         probes: list[tuple[str, str, dict | None]] = [
             ("post", "/agents", {"id": "demo-agent", "name": "Demo"}),
-            ("post", "/agents/revenue-ops-agent/versions", {}),
+            ("post", "/agents/ledger/versions", {}),
             (
                 "post",
-                "/agents/revenue-ops-agent/versions/revenue-ops-agent_phase6/publish",
+                "/agents/ledger/versions/ledger_phase6/publish",
                 {},
             ),
-            ("patch", "/agents/revenue-ops-agent/versions/revenue-ops-agent_phase6", {}),
+            ("patch", "/agents/ledger/versions/ledger_phase6", {}),
             (
                 "post",
                 "/tools",
@@ -227,7 +227,7 @@ def test_project2_mutation_routes_fail_closed_without_operator_token(
                 },
             ),
             ("post", "/eval-datasets", {"name": "demo-dataset", "case_ids": ["case_1"]}),
-            ("post", "/runs", {"agent_version_id": "revenue-ops-agent_phase6"}),
+            ("post", "/runs", {"agent_version_id": "ledger_phase6"}),
             ("post", "/runs/run_demo/transitions", {"status": "failed"}),
         ]
         responses = [

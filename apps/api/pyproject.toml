@@ -3,9 +3,9 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ops-agent-api"
+name = "ledger-api"
 version = "0.1.0"
-description = "FastAPI backend for the Ops Agent project."
+description = "FastAPI backend for the Ledger project."
 requires-python = ">=3.12"
 dependencies = [
   "alembic>=1.16,<2",

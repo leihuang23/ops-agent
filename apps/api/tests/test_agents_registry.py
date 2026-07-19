@@ -58,13 +58,13 @@ class TestAgentsList:
         body = response.json()
         assert body["total"] >= 1
         ids = [a["id"] for a in body["agents"]]
-        assert "revenue-ops-agent" in ids
+        assert "ledger" in ids
 
     def test_list_agents_summary_has_required_fields(self, client: TestClient) -> None:
         response = client.get("/agents")
         body = response.json()
-        agent = next(a for a in body["agents"] if a["id"] == "revenue-ops-agent")
-        assert agent["name"] == "Revenue Ops Agent"
+        agent = next(a for a in body["agents"] if a["id"] == "ledger")
+        assert agent["name"] == "Ledger"
         assert agent["default_model"] == "gpt-4o-mini"
         assert "description" in agent
         assert "version_count" in agent
@@ -84,8 +84,8 @@ class TestAgentsList:
             db_session.add_all(
                 [
                     AgentVersion(
-                        id="revenue-ops-agent_list_legacy_null",
-                        agent_id="revenue-ops-agent",
+                        id="ledger_list_legacy_null",
+                        agent_id="ledger",
                         version_number=None,
                         semantic_version=None,
                         status="published",
@@ -97,13 +97,13 @@ class TestAgentsList:
                         allowed_scopes=[],
                         published_at=now,
                         published_by="test",
-                        forked_from_version_id="revenue-ops-agent_v1",
+                        forked_from_version_id="ledger_v1",
                         created_at=now,
                         updated_at=now,
                     ),
                     AgentVersion(
-                        id="revenue-ops-agent_list_v3",
-                        agent_id="revenue-ops-agent",
+                        id="ledger_list_v3",
+                        agent_id="ledger",
                         version_number=3,
                         semantic_version="3.0.0",
                         status="published",
@@ -115,7 +115,7 @@ class TestAgentsList:
                         allowed_scopes=[],
                         published_at=now,
                         published_by="test",
-                        forked_from_version_id="revenue-ops-agent_v1",
+                        forked_from_version_id="ledger_v1",
                         created_at=now,
                         updated_at=now,
                     ),
@@ -125,16 +125,16 @@ class TestAgentsList:
 
         response = client.get("/agents")
         assert response.status_code == 200
-        agent = next(a for a in response.json()["agents"] if a["id"] == "revenue-ops-agent")
-        assert agent["latest_published_version"]["id"] == "revenue-ops-agent_list_v3"
+        agent = next(a for a in response.json()["agents"] if a["id"] == "ledger")
+        assert agent["latest_published_version"]["id"] == "ledger_list_v3"
 
 
 class TestAgentDetail:
     def test_get_agent_detail_includes_versions(self, client: TestClient) -> None:
-        response = client.get("/agents/revenue-ops-agent")
+        response = client.get("/agents/ledger")
         assert response.status_code == 200
         body = response.json()
-        assert body["id"] == "revenue-ops-agent"
+        assert body["id"] == "ledger"
         assert "versions" in body
         assert len(body["versions"]) >= 1
         v1 = next(v for v in body["versions"] if v["version_number"] == 1)
@@ -152,8 +152,8 @@ class TestAgentDetail:
             db_session.add_all(
                 [
                     AgentVersion(
-                        id="revenue-ops-agent_detail_legacy_null",
-                        agent_id="revenue-ops-agent",
+                        id="ledger_detail_legacy_null",
+                        agent_id="ledger",
                         version_number=None,
                         semantic_version=None,
                         status="published",
@@ -165,13 +165,13 @@ class TestAgentDetail:
                         allowed_scopes=[],
                         published_at=now,
                         published_by="test",
-                        forked_from_version_id="revenue-ops-agent_v1",
+                        forked_from_version_id="ledger_v1",
                         created_at=now,
                         updated_at=now,
                     ),
                     AgentVersion(
-                        id="revenue-ops-agent_detail_v3",
-                        agent_id="revenue-ops-agent",
+                        id="ledger_detail_v3",
+                        agent_id="ledger",
                         version_number=3,
                         semantic_version="3.0.0",
                         status="published",
@@ -183,7 +183,7 @@ class TestAgentDetail:
                         allowed_scopes=[],
                         published_at=now,
                         published_by="test",
-                        forked_from_version_id="revenue-ops-agent_v1",
+                        forked_from_version_id="ledger_v1",
                         created_at=now,
                         updated_at=now,
                     ),
@@ -191,13 +191,13 @@ class TestAgentDetail:
             )
             db_session.commit()
 
-        response = client.get("/agents/revenue-ops-agent")
+        response = client.get("/agents/ledger")
         assert response.status_code == 200
         body = response.json()
         published = [v for v in body["versions"] if v["status"] == "published"]
-        assert body["latest_published_version"]["id"] == "revenue-ops-agent_detail_v3"
-        assert published[0]["id"] == "revenue-ops-agent_detail_v3"
-        assert published[-1]["id"] == "revenue-ops-agent_detail_legacy_null"
+        assert body["latest_published_version"]["id"] == "ledger_detail_v3"
+        assert published[0]["id"] == "ledger_detail_v3"
+        assert published[-1]["id"] == "ledger_detail_legacy_null"
 
     def test_get_nonexistent_agent_returns_404(self, client: TestClient) -> None:
         response = client.get("/agents/nonexistent-agent")
@@ -330,7 +330,7 @@ class TestCreateAgent:
 
 class TestAgentVersions:
     def test_list_versions_for_seeded_agent(self, client: TestClient) -> None:
-        response = client.get("/agents/revenue-ops-agent/versions")
+        response = client.get("/agents/ledger/versions")
         assert response.status_code == 200
         body = response.json()
         assert "total" in body
@@ -350,7 +350,7 @@ class TestAgentVersions:
         self, client: TestClient
     ) -> None:
         version_resp = client.post(
-            "/agents/revenue-ops-agent/versions",
+            "/agents/ledger/versions",
             json={"system_prompt": "Custom draft prompt", "model": "gpt-4o-mini"},
         )
         assert version_resp.status_code == 201
@@ -360,17 +360,17 @@ class TestAgentVersions:
         assert version["semantic_version"] is None
         assert version["model"] == "gpt-4o-mini"
         assert version["system_prompt"] == "Custom draft prompt"
-        assert version["forked_from_version_id"] == "revenue-ops-agent_phase6"
+        assert version["forked_from_version_id"] == "ledger_phase6"
 
     def test_create_draft_version_from_specific_version(self, client: TestClient) -> None:
         version_resp = client.post(
-            "/agents/revenue-ops-agent/versions",
-            json={"fork_from_version_id": "revenue-ops-agent_v1"},
+            "/agents/ledger/versions",
+            json={"fork_from_version_id": "ledger_v1"},
         )
         assert version_resp.status_code == 201
         version = version_resp.json()
         assert version["status"] == "draft"
-        assert version["forked_from_version_id"] == "revenue-ops-agent_v1"
+        assert version["forked_from_version_id"] == "ledger_v1"
         assert version["model"] == "gpt-4o-mini"
         assert isinstance(version["system_prompt"], str)
 
@@ -451,17 +451,17 @@ class TestAgentVersions:
         ]
 
     def test_get_version_detail(self, client: TestClient) -> None:
-        response = client.get("/agents/revenue-ops-agent/versions/revenue-ops-agent_v1")
+        response = client.get("/agents/ledger/versions/ledger_v1")
         assert response.status_code == 200
         version = response.json()
-        assert version["id"] == "revenue-ops-agent_v1"
+        assert version["id"] == "ledger_v1"
         assert version["status"] == "published"
         assert "system_prompt" in version
         assert "enabled_tool_ids" in version
         assert "allowed_scopes" in version
 
     def test_get_nonexistent_version_returns_404(self, client: TestClient) -> None:
-        response = client.get("/agents/revenue-ops-agent/versions/nonexistent")
+        response = client.get("/agents/ledger/versions/nonexistent")
         assert response.status_code == 404
 
 
@@ -491,7 +491,7 @@ class TestVersionMutability:
 
     def test_update_published_version_returns_409(self, client: TestClient) -> None:
         response = client.patch(
-            "/agents/revenue-ops-agent/versions/revenue-ops-agent_v1",
+            "/agents/ledger/versions/ledger_v1",
             json={"system_prompt": "trying to change published"},
         )
         assert response.status_code == 409
@@ -527,7 +527,7 @@ class TestPublishVersion:
 
     def test_publish_already_published_returns_409(self, client: TestClient) -> None:
         response = client.post(
-            "/agents/revenue-ops-agent/versions/revenue-ops-agent_v1/publish",
+            "/agents/ledger/versions/ledger_v1/publish",
         )
         assert response.status_code == 409
         body = response.json()
@@ -563,16 +563,16 @@ class TestPublishVersion:
 
 
 class TestSeedIdempotency:
-    def test_seed_creates_revenue_ops_agent(self, session_factory: Callable[[], Session]) -> None:
+    def test_seed_creates_revenue_ledger(self, session_factory: Callable[[], Session]) -> None:
         with session_factory() as db_session:
-            agent = db_session.get(Agent, "revenue-ops-agent")
+            agent = db_session.get(Agent, "ledger")
             assert agent is not None
-            assert agent.name == "Revenue Ops Agent"
+            assert agent.name == "Ledger"
             assert agent.default_model == "gpt-4o-mini"
 
     def test_seed_creates_published_v1(self, session_factory: Callable[[], Session]) -> None:
         with session_factory() as db_session:
-            v1 = db_session.get(AgentVersion, "revenue-ops-agent_v1")
+            v1 = db_session.get(AgentVersion, "ledger_v1")
             assert v1 is not None
             assert v1.status == "published"
             assert v1.version_number == 1
@@ -594,10 +594,10 @@ class TestSeedIdempotency:
         self, session_factory: Callable[[], Session]
     ) -> None:
         with session_factory() as db_session:
-            phase6 = db_session.get(AgentVersion, "revenue-ops-agent_phase6")
+            phase6 = db_session.get(AgentVersion, "ledger_phase6")
             assert phase6 is not None
             assert phase6.status == "published"
-            assert phase6.forked_from_version_id == "revenue-ops-agent_v1"
+            assert phase6.forked_from_version_id == "ledger_v1"
             assert set(phase6.enabled_tool_ids) == set(PHASE6_ENABLED_TOOL_IDS)
             assert set(phase6.allowed_scopes) == {
                 "read_data",
@@ -611,12 +611,12 @@ class TestSeedIdempotency:
     ) -> None:
         with session_factory() as db_session:
             degraded = db_session.get(
-                AgentVersion, "revenue-ops-agent_phase6_degraded"
+                AgentVersion, "ledger_phase6_degraded"
             )
             assert degraded is not None
             assert degraded.status == "published"
             assert degraded.version_number < 0
-            assert degraded.forked_from_version_id == "revenue-ops-agent_phase6"
+            assert degraded.forked_from_version_id == "ledger_phase6"
             assert "search_docs" not in degraded.enabled_tool_ids
             assert "run_eval" in degraded.enabled_tool_ids
             assert "run_eval" in degraded.allowed_scopes
@@ -627,14 +627,14 @@ class TestSeedIdempotency:
         with session_factory() as db_session:
             before_count = db_session.scalar(
                 select(func.count()).select_from(AgentVersion).where(
-                    AgentVersion.agent_id == "revenue-ops-agent"
+                    AgentVersion.agent_id == "ledger"
                 )
             )
             _seed_control_plane_agent(db_session)
             db_session.commit()
             after_count = db_session.scalar(
                 select(func.count()).select_from(AgentVersion).where(
-                    AgentVersion.agent_id == "revenue-ops-agent"
+                    AgentVersion.agent_id == "ledger"
                 )
             )
             assert after_count == before_count
@@ -646,7 +646,7 @@ class TestSeedIdempotency:
         from app.seed import ensure_seeded_if_empty
 
         with session_factory() as db_session:
-            version = db_session.get(AgentVersion, "revenue-ops-agent_v1")
+            version = db_session.get(AgentVersion, "ledger_v1")
             assert version is not None
             version.enabled_tool_ids = ["query_revenue_metrics"]
             version.allowed_scopes = ["read_data"]
@@ -674,7 +674,7 @@ class TestSeedIdempotency:
         from app.seed import ensure_seeded_if_empty
 
         with session_factory() as db_session:
-            version = db_session.get(AgentVersion, "revenue-ops-agent_phase6")
+            version = db_session.get(AgentVersion, "ledger_phase6")
             assert version is not None
             version.enabled_tool_ids = ["query_revenue_metrics"]
             version.allowed_scopes = ["read_data"]
@@ -882,8 +882,8 @@ class TestVersionOrdering:
             db_session.add_all(
                 [
                     AgentVersion(
-                        id="revenue-ops-agent_legacy_null",
-                        agent_id="revenue-ops-agent",
+                        id="ledger_legacy_null",
+                        agent_id="ledger",
                         version_number=None,
                         semantic_version=None,
                         status="published",
@@ -895,13 +895,13 @@ class TestVersionOrdering:
                         allowed_scopes=[],
                         published_at=now,
                         published_by="test",
-                        forked_from_version_id="revenue-ops-agent_v1",
+                        forked_from_version_id="ledger_v1",
                         created_at=now,
                         updated_at=now,
                     ),
                     AgentVersion(
-                        id="revenue-ops-agent_v3_ordering",
-                        agent_id="revenue-ops-agent",
+                        id="ledger_v3_ordering",
+                        agent_id="ledger",
                         version_number=3,
                         semantic_version="3.0.0",
                         status="published",
@@ -913,7 +913,7 @@ class TestVersionOrdering:
                         allowed_scopes=[],
                         published_at=now,
                         published_by="test",
-                        forked_from_version_id="revenue-ops-agent_v1",
+                        forked_from_version_id="ledger_v1",
                         created_at=now,
                         updated_at=now,
                     ),
@@ -924,7 +924,7 @@ class TestVersionOrdering:
             default = get_default_published_version(db_session)
 
             assert default is not None
-            assert default.id == "revenue-ops-agent_v3_ordering"
+            assert default.id == "ledger_v3_ordering"
 
 
 class TestCrossAgentSecurity:

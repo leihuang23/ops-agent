@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This repository is for a production-shaped SaaS revenue and support operations agent. `prd.md` is the product brief and success criteria; the implementation source of truth is the code, Alembic migrations, API OpenAPI docs, and tests. Treat `prd.md` as the contract, not a detailed implementation plan.
+This repository is for Ledger, a production-shaped SaaS revenue and support operations agent. `prd.md` is the product brief and success criteria; the implementation source of truth is the code, Alembic migrations, API OpenAPI docs, and tests. Treat `prd.md` as the contract, not a detailed implementation plan.
 
 ## Critical Product Read
 

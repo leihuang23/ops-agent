@@ -326,7 +326,7 @@ def build_users() -> list[User]:
                     account_id=account_id(account_number),
                     email=(
                         f"user{user_number}.acct{account_number:02d}"
-                        "@example.ops-agent.test"
+                        "@example.ledger.test"
                     ),
                     full_name=f"User {user_number} Account {account_number:02d}",
                     role=roles[(account_number + user_number) % len(roles)],
@@ -727,7 +727,7 @@ def _seed_control_plane_agent(session: Session) -> None:
     from app.agents.service import DEFAULT_ENABLED_TOOL_IDS
     from app.tools.scopes import DEFAULT_V1_ALLOWED_SCOPES
 
-    agent_id = "revenue-ops-agent"
+    agent_id = "ledger"
     version_id = f"{agent_id}_v1"
     existing_agent = session.get(Agent, agent_id)
     if existing_agent is not None:
@@ -743,7 +743,7 @@ def _seed_control_plane_agent(session: Session) -> None:
     if existing_agent is None:
         agent = Agent(
             id=agent_id,
-            name="Revenue Ops Agent",
+            name="Ledger",
             description=(
                 "Investigates SaaS revenue anomalies by querying metrics, searching "
                 "knowledge documents, and inspecting support tickets, then producing "
@@ -832,7 +832,7 @@ def _seed_eval_studio_assets(session: Session) -> None:
     degraded_id = PHASE6_DEGRADED_AGENT_VERSION_ID
     if session.get(AgentVersion, degraded_id) is None:
         source = session.get(AgentVersion, PHASE6_AGENT_VERSION_ID) or session.get(
-            AgentVersion, "revenue-ops-agent_v1"
+            AgentVersion, "ledger_v1"
         )
         if source is None:
             return
@@ -880,7 +880,7 @@ def _seed_phase6_agent_version(session: Session) -> None:
     version_id = PHASE6_AGENT_VERSION_ID
     if session.get(AgentVersion, version_id) is not None:
         return
-    source = session.get(AgentVersion, "revenue-ops-agent_v1")
+    source = session.get(AgentVersion, "ledger_v1")
     if source is None:
         return
 
@@ -1285,7 +1285,7 @@ def validate_seed_target(database_url: str, app_env: str) -> None:
     parsed_url = urlparse(database_url.replace("+psycopg", "", 1))
     safe_hosts = {"", "localhost", "127.0.0.1", "::1", "postgres"}
     database_name = parsed_url.path.rsplit("/", maxsplit=1)[-1]
-    safe_database_names = {"ops_agent", "ops_agent_test", "test_ops_agent"}
+    safe_database_names = {"ledger", "ledger_test", "test_ledger"}
     if parsed_url.hostname in safe_hosts and database_name in safe_database_names:
         return
 

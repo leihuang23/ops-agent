@@ -23,15 +23,15 @@ WORKDIR /app
 ENV NODE_ENV=production \
     PORT=3000
 
-RUN addgroup -S opsagent && adduser -S opsagent -G opsagent \
+RUN addgroup -S ledger && adduser -S ledger -G ledger \
     && apk add --no-cache curl
 
-COPY --from=builder --chown=opsagent:opsagent /app/.next ./.next
-COPY --from=builder --chown=opsagent:opsagent /app/node_modules ./node_modules
-COPY --from=builder --chown=opsagent:opsagent /app/package.json ./package.json
-COPY --from=builder --chown=opsagent:opsagent /app/public ./public
+COPY --from=builder --chown=ledger:ledger /app/.next ./.next
+COPY --from=builder --chown=ledger:ledger /app/node_modules ./node_modules
+COPY --from=builder --chown=ledger:ledger /app/package.json ./package.json
+COPY --from=builder --chown=ledger:ledger /app/public ./public
 
-USER opsagent
+USER ledger
 
 EXPOSE 3000
 

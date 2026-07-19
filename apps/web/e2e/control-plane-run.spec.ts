@@ -8,16 +8,16 @@ test.describe('control-plane run', () => {
     await page.goto('/agents');
     await expect(page.getByRole('heading', { name: 'Agents', exact: true })).toBeVisible();
 
-    // Enter the first (default) agent's detail page.
-    // Use the full agent name as the accessible-name filter so the nav brand
-    // link ("Ops Agent" -> /) is not matched — a bare /Ops Agent/ alternative
-    // would resolve to the brand link first and navigate to the dashboard.
-    const agentLink = page.getByRole('link', { name: 'Revenue Ops Agent' }).first();
+    // Enter the default agent's detail page. The product brand and agent are
+    // both named Ledger, so scope the accessible-name lookup to page content.
+    const agentLink = page
+      .getByRole('main')
+      .getByRole('link', { name: 'Ledger', exact: true });
     await agentLink.click();
 
     // Pin the stable seeded baseline. Other parallel E2E scenarios publish
     // candidates, so "first/latest Inspect" would make this test order-dependent.
-    await page.goto('/agents/revenue-ops-agent/versions/revenue-ops-agent_phase6');
+    await page.goto('/agents/ledger/versions/ledger_phase6');
 
     // The version detail page exposes the Launch form on published versions.
     const launchButton = page.getByRole('button', { name: 'Launch run' });

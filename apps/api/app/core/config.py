@@ -6,11 +6,11 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    app_name: str = "ops-agent-api"
+    app_name: str = "ledger-api"
     app_env: str = "local"
     app_version: str = "0.1.0"
     database_url: str = Field(
-        default="postgresql+psycopg://ops_agent:ops_agent@localhost:5432/ops_agent"
+        default="postgresql+psycopg://ledger:ledger@localhost:5432/ledger"
     )
     redis_url: str = "redis://localhost:6379/0"
     backend_cors_origins: Annotated[list[str], NoDecode] = ["http://localhost:3000"]
@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     langsmith_tracing: bool = False
     langsmith_api_key: str | None = None
     langsmith_endpoint: str = "https://api.smith.langchain.com"
-    langsmith_project: str = "ops-agent-local"
+    langsmith_project: str = "ledger-local"
     langsmith_web_url: str = "https://smith.langchain.com"
 
     # LLM configuration

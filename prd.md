@@ -16,7 +16,9 @@
   database; hosted Langfuse datasets or LangSmith experiments can be added later.
 - Deployment: Docker Compose locally; Vercel for frontend; Render/Fly/Railway for backend.
 
-## PRD: SaaS Revenue and Support Ops Agent
+## PRD: Ledger
+
+Ledger is a forensic revenue and support operations agent for SaaS businesses.
 
 ### Problem
 

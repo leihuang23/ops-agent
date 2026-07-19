@@ -1,21 +1,21 @@
-# Ops Agent
+# Ledger
 
-Ops Agent is a production-shaped SaaS revenue investigation agent and the control plane used to operate it. It answers prompts such as “MRR dropped this week” by gathering SQL, support, product, incident, and knowledge-base evidence before it names a root cause or proposes an action.
+Ledger is a production-shaped SaaS revenue investigation agent and the control plane used to operate it. It acts like a forensic accountant for SaaS operations: every claim is backed by a cited source, every action leaves an audit trail, and every run is reconstructable. The name reflects both the financial record and the immutable evidence log at the heart of the product.
 
 The repository tells two connected portfolio stories:
 
-- **Project 1 — Revenue Ops Agent:** anomaly detection, evidence retrieval, cited reports, approval-gated mock actions, traces, and deterministic evals.
-- **Project 2 — Agent Control Plane:** immutable agent versions, a governed tool registry, launchable runs, cost/latency observability, a global approval queue, and A-vs-B regression evaluation.
+- **Project 1 - Ledger:** anomaly detection, evidence retrieval, cited reports, approval-gated mock actions, traces, and deterministic evals.
+- **Project 2 - Agent Control Plane:** immutable agent versions, a governed tool registry, launchable runs, cost/latency observability, a global approval queue, and A-vs-B regression evaluation.
 
 The product is intentionally not a toy chatbot. Every important claim is expected to link back to retrieved evidence, every tool call is permission-checked, and every risky action remains a mock until an operator decides it.
 
-[Watch the recorded walkthrough](docs/assets/ops-agent-walkthrough.webm) or follow the [narrated demo script](docs/demo-script.md).
+[Watch the recorded walkthrough](docs/assets/ledger-walkthrough.webm) or follow the [narrated demo script](docs/demo-script.md).
 
 ## The Problem
 
 A fluent incident summary is easy to demo and hard to trust. Production teams need to know which evidence an agent retrieved, which version and tools it used, what failed, how much the run cost, whether a change regressed quality, and whether a proposed action crossed an approval boundary.
 
-Ops Agent makes those questions inspectable from the UI and reconstructable from the database. Deterministic analytics and retrieval produce the evidence; the LLM layer, when enabled, synthesizes it through a structured schema. The same seeded cases then become regression tests for agent quality and safety.
+Ledger makes those questions inspectable from the UI and reconstructable from the database. Deterministic analytics and retrieval produce the evidence; the LLM layer, when enabled, synthesizes it through a structured schema. The same seeded cases then become regression tests for agent quality and safety.
 
 ## Architecture
 
@@ -25,10 +25,10 @@ flowchart LR
     web --> api["FastAPI control plane"]
     api --> registry["Agents, versions, tools, scopes"]
     api --> queue["Redis + Celery"]
-    queue --> graph["Fixed LangGraph investigation DAG"]
-    graph --> evidence["SQL metrics · tickets · product events · pgvector docs"]
-    graph --> safety["Tool policy + approval gate"]
-    graph --> traces["Local / Langfuse / LangSmith traces"]
+    queue --> workflow["Fixed LangGraph investigation DAG"]
+    workflow --> evidence["SQL metrics · tickets · product events · pgvector docs"]
+    workflow --> safety["Tool policy + approval gate"]
+    workflow --> traces["Local / Langfuse / LangSmith traces"]
     registry --> postgres[("Postgres + pgvector")]
     evidence --> postgres
     safety --> postgres
@@ -39,7 +39,7 @@ flowchart LR
 
 The fixed investigation graph keeps execution auditable. Published agent versions snapshot their prompt, model, enabled tools, and allowed scopes. Every run persists its input, ordered steps, blocked calls, trace reference, model usage, final report, mock actions, approval decisions, and eval results.
 
-Phase 6 introduces action and eval permissions as a new published `revenue-ops-agent_phase6` snapshot. Upgrades never widen an existing published row, so historical run/version references remain reproducible.
+Phase 6 introduces action and eval permissions as a new published `ledger_phase6` snapshot. Upgrades never widen an existing published row, so historical run/version references remain reproducible.
 
 ### What to inspect first
 
@@ -62,7 +62,7 @@ The screenshots are generated from the seeded local stack with `npm run portfoli
 
 ## Five-Minute Demo
 
-1. Open **Agents**, inspect the published Revenue Ops Agent, and review its immutable tool/scopes snapshot.
+1. Open **Agents**, inspect the published Ledger, and review its immutable tool/scopes snapshot.
 2. Open **Tools** to verify schemas, permission scopes, and implementation bindings are explicit.
 3. Launch the published version against the seeded MRR-drop incident and inspect the ordered run timeline, citations, trace, token usage, and estimated cost.
 4. Open **Approvals** and verify that the high-risk customer follow-up is pending until it is approved or rejected.
@@ -272,7 +272,7 @@ LangSmith remains supported for comparison or LangChain-heavy demos:
 - `LANGSMITH_API_KEY=` is required for hosted LangSmith traces.
 - `LANGSMITH_TRACING=true` lets `auto` select LangSmith when Langfuse credentials are absent.
 - `LANGSMITH_ENDPOINT=https://api.smith.langchain.com` or the regional endpoint.
-- `LANGSMITH_PROJECT=ops-agent-local` names the LangSmith project.
+- `LANGSMITH_PROJECT=ledger-local` names the LangSmith project.
 - `LANGSMITH_WEB_URL=https://smith.langchain.com` is used when constructing trace links.
 
 When an external provider is missing, disabled, or fails to start, agent runs
@@ -361,7 +361,7 @@ See [docs/security.md](docs/security.md) for trust boundaries, residual risks, a
 - Token gates are suitable for a portfolio demo, not multi-user authentication, RBAC, or tenant isolation.
 - All business records are deterministic synthetic data; there are no real SaaS, CRM, email, or payment integrations.
 - External actions remain mocks. Approval demonstrates the state machine and audit boundary, not message delivery.
-- The Revenue Ops workflow is a fixed linear DAG; the control plane versions configuration, not graph topology.
+- The Ledger investigation workflow is a fixed linear DAG; the control plane versions configuration, not graph topology.
 - Eval scoring uses exact deterministic root-cause signatures rather than an LLM judge or semantic equivalence.
 - Hosted tracing is optional; without credentials, every run still has a local trace identifier but not a hosted trace page.
 - The provided Render topology includes a continuously running worker and managed data services, so review current provider pricing before deploying it.

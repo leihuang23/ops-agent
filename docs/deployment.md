@@ -8,7 +8,7 @@ The provider configuration follows the current official [Render Blueprint specif
 
 1. Connect the repository to Render and create a Blueprint from `render.yaml`.
 2. Review the instance plans before applying the Blueprint. The worker cannot use Render's free web-service plan, and provider pricing changes independently of this repository.
-3. Enter `BACKEND_CORS_ORIGINS` when Render prompts for it. Use the exact Vercel production origin, for example `https://ops-agent.example.com`; use a comma-separated list only when multiple trusted origins are required.
+3. Enter `BACKEND_CORS_ORIGINS` when Render prompts for it. Use the exact Vercel production origin, for example `https://ledger.example.com`; use a comma-separated list only when multiple trusted origins are required.
 4. Let the API become ready at `/ready`. Its container runs Alembic and seeds a blank demo database under a Postgres advisory lock before Uvicorn starts.
 5. Confirm the generated `DEMO_OPERATOR_TOKEN`, `EVAL_RUN_TOKEN`, and `DOCUMENT_INGEST_TOKEN` values in the API service. Do not commit or log them.
 
@@ -24,7 +24,7 @@ The API accepts Render's `postgresql://` connection string and normalizes it to 
 
 | Variable | Value |
 | --- | --- |
-| `API_INTERNAL_BASE_URL` | Public Render API base URL, such as `https://ops-agent-api.onrender.com` |
+| `API_INTERNAL_BASE_URL` | Public Render API base URL, such as `https://ledger-api.onrender.com` |
 | `NEXT_PUBLIC_API_BASE_URL` | The same public Render API base URL |
 | `OPERATOR_UI_ENABLED` | `false` for an anonymous public portfolio deployment |
 

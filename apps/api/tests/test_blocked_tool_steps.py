@@ -78,7 +78,7 @@ def test_scope_removed_records_blocked_step(
         # All four data tools enabled, but ``read_data`` is revoked from the
         # allowed scopes -> every read tool must be blocked at dispatch.
         version_resp = client.post(
-            "/agents/revenue-ops-agent/versions",
+            "/agents/ledger/versions",
             json={
                 "enabled_tool_ids": list(PHASE6_ENABLED_TOOL_IDS),
                 "allowed_scopes": [
@@ -92,7 +92,7 @@ def test_scope_removed_records_blocked_step(
         version_id = version_resp.json()["id"]
 
         publish_resp = client.post(
-            f"/agents/revenue-ops-agent/versions/{version_id}/publish"
+            f"/agents/ledger/versions/{version_id}/publish"
         )
         assert publish_resp.status_code == 200
 
@@ -144,14 +144,14 @@ def test_enabled_tool_with_allowed_scope_still_runs(
         # Inherit allowed_scopes from the seeded v1 (read_data included) by
         # omitting allowed_scopes here.
         version_resp = client.post(
-            "/agents/revenue-ops-agent/versions",
+            "/agents/ledger/versions",
             json={"enabled_tool_ids": list(PHASE6_ENABLED_TOOL_IDS)},
         )
         assert version_resp.status_code == 201
         version_id = version_resp.json()["id"]
 
         publish_resp = client.post(
-            f"/agents/revenue-ops-agent/versions/{version_id}/publish"
+            f"/agents/ledger/versions/{version_id}/publish"
         )
         assert publish_resp.status_code == 200
 
@@ -183,7 +183,7 @@ def test_action_scope_removal_blocks_mock_actions_and_approval_requests(
     client = _client_with_session(session_factory)
     try:
         version_resp = client.post(
-            "/agents/revenue-ops-agent/versions",
+            "/agents/ledger/versions",
             json={
                 "enabled_tool_ids": list(PHASE6_ENABLED_TOOL_IDS),
                 "allowed_scopes": ["read_data", "run_eval"],
@@ -192,7 +192,7 @@ def test_action_scope_removal_blocks_mock_actions_and_approval_requests(
         assert version_resp.status_code == 201
         version_id = version_resp.json()["id"]
         assert client.post(
-            f"/agents/revenue-ops-agent/versions/{version_id}/publish"
+            f"/agents/ledger/versions/{version_id}/publish"
         ).status_code == 200
 
         response = client.post(
@@ -226,7 +226,7 @@ def test_approval_scope_removal_preserves_low_risk_mock_actions(
     client = _client_with_session(session_factory)
     try:
         version_resp = client.post(
-            "/agents/revenue-ops-agent/versions",
+            "/agents/ledger/versions",
             json={
                 "enabled_tool_ids": list(PHASE6_ENABLED_TOOL_IDS),
                 "allowed_scopes": ["read_data", "write_mock_action", "run_eval"],
@@ -235,7 +235,7 @@ def test_approval_scope_removal_preserves_low_risk_mock_actions(
         assert version_resp.status_code == 201
         version_id = version_resp.json()["id"]
         assert client.post(
-            f"/agents/revenue-ops-agent/versions/{version_id}/publish"
+            f"/agents/ledger/versions/{version_id}/publish"
         ).status_code == 200
 
         first = client.post(
