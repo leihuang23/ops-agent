@@ -724,7 +724,7 @@ def build_eval_cases() -> list[EvalCase]:
 
 
 def _seed_control_plane_agent(session: Session) -> None:
-    from app.agents.service import DEFAULT_ENABLED_TOOL_IDS
+    from app.agents.service import DEFAULT_V1_ENABLED_TOOL_IDS
     from app.tools.scopes import DEFAULT_V1_ALLOWED_SCOPES
 
     agent_id = "ledger"
@@ -770,7 +770,7 @@ def _seed_control_plane_agent(session: Session) -> None:
             model=agent.default_model,
             temperature=0.1,
             max_tokens=1024,
-            enabled_tool_ids=list(DEFAULT_ENABLED_TOOL_IDS),
+            enabled_tool_ids=list(DEFAULT_V1_ENABLED_TOOL_IDS),
             allowed_scopes=list(DEFAULT_V1_ALLOWED_SCOPES),
             published_at=now,
             published_by="bootstrap",

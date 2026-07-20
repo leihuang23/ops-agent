@@ -583,6 +583,8 @@ class TestSeedIdempotency:
                 "fetch_account_details",
                 "search_docs",
                 "fetch_support_tickets",
+                "create_mock_action",
+                "request_approval",
             }
             assert set(v1.allowed_scopes) == {
                 "read_data",

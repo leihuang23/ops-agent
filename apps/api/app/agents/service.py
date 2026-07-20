@@ -62,6 +62,14 @@ DEFAULT_ENABLED_TOOL_IDS: tuple[str, ...] = (
     "search_docs",
     "fetch_support_tickets",
 )
+# PRD §9.5 pins the immutable v1 snapshot's three scopes; its enabled tool IDs
+# cover the four data tools plus the two governed action tools those scopes
+# authorize, so can_call_tool governs v1 exactly like every other version.
+DEFAULT_V1_ENABLED_TOOL_IDS: tuple[str, ...] = (
+    *DEFAULT_ENABLED_TOOL_IDS,
+    "create_mock_action",
+    "request_approval",
+)
 PHASE6_ENABLED_TOOL_IDS: tuple[str, ...] = tuple(TOOL_SCOPES)
 
 
@@ -590,8 +598,8 @@ def publish_version(
 
 
 DEFAULT_AGENT_ID = "ledger"
-# DEFAULT_AGENT_VERSION_ID remains the original immutable v1 snapshot. The legacy/CLI
-# eval baseline is pinned separately to PHASE6_AGENT_VERSION_ID (see app.evals.runner).
+# DEFAULT_AGENT_VERSION_ID remains the original immutable v1 snapshot and is the
+# pinned baseline for the legacy/CLI eval suite (see app.evals.runner).
 DEFAULT_AGENT_VERSION_ID = "ledger_v1"
 PHASE6_AGENT_VERSION_ID = "ledger_phase6"
 PHASE6_DEGRADED_AGENT_VERSION_ID = "ledger_phase6_degraded"

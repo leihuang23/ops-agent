@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 from collections.abc import Callable, Generator
 
@@ -12,12 +13,15 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 import app.models  # noqa: F401
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.db.base import Base
 from app.db.session import get_db
 from app.knowledge.embeddings import (
     LocalHashingEmbeddings,
     OpenAIEmbeddings,
+    ZhipuEmbeddings,
+    _project_to_dimensions,
+    cosine_similarity,
     get_embedding_provider,
 )
 from app.knowledge.ingestion import (
@@ -385,6 +389,121 @@ def test_get_embedding_provider_falls_back_to_local_without_openai_key(
     finally:
         monkeypatch.delenv("EMBEDDING_PROVIDER", raising=False)
         get_settings.cache_clear()
+
+
+def _mock_zhipu_embedding_response(input_texts: list[str], dimensions: int) -> dict:
+    return {
+        "data": [
+            {
+                "object": "embedding",
+                "index": index,
+                "embedding": [float((index + 1) * (dim + 1)) for dim in range(dimensions)],
+            }
+            for index, _ in enumerate(input_texts)
+        ],
+        "model": "embedding-3",
+        "usage": {"prompt_tokens": 10, "total_tokens": 10},
+    }
+
+
+def test_zhipu_embeddings_send_expected_payload_and_project() -> None:
+    input_texts = ["billing retry webhook regression", "MRR drop", "usage spike"]
+    seen_payloads: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Authorization"] == "Bearer zhipu-test-key"
+        payload = json.loads(request.content)
+        seen_payloads.append(payload)
+        raw = _mock_zhipu_embedding_response(payload["input"], 256)
+        # Return rows out of order to prove results are restored by index.
+        raw["data"] = list(reversed(raw["data"]))
+        return httpx.Response(200, json=raw)
+
+    provider = ZhipuEmbeddings(
+        api_key="zhipu-test-key", transport=httpx.MockTransport(handler)
+    )
+    vectors = provider.embed(input_texts)
+
+    assert provider.provider == "zhipu"
+    assert provider.dimensions == 96
+    assert len(seen_payloads) == 1
+    assert seen_payloads[0]["model"] == "embedding-3"
+    assert seen_payloads[0]["dimensions"] == 256
+    assert seen_payloads[0]["input"] == input_texts
+    assert len(vectors) == len(input_texts)
+    assert all(len(vector) == 96 for vector in vectors)
+    assert all(
+        math.sqrt(sum(v * v for v in vector)) == pytest.approx(1.0)
+        for vector in vectors
+    )
+    for item in _mock_zhipu_embedding_response(input_texts, 256)["data"]:
+        assert vectors[item["index"]] == pytest.approx(
+            _project_to_dimensions(item["embedding"], 96)
+        )
+
+
+def test_zhipu_embeddings_split_requests_into_batches_of_64() -> None:
+    input_texts = [f"text {index}" for index in range(150)]
+    seen_batches: list[list[str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        seen_batches.append(payload["input"])
+        return httpx.Response(
+            200, json=_mock_zhipu_embedding_response(payload["input"], 256)
+        )
+
+    provider = ZhipuEmbeddings(
+        api_key="zhipu-test-key", transport=httpx.MockTransport(handler)
+    )
+    vectors = provider.embed(input_texts)
+
+    assert [len(batch) for batch in seen_batches] == [64, 64, 22]
+    assert len(vectors) == len(input_texts)
+    for global_index, vector in enumerate(vectors):
+        local_index = global_index % 64
+        raw = [float((local_index + 1) * (dim + 1)) for dim in range(256)]
+        assert vector == pytest.approx(_project_to_dimensions(raw, 96))
+
+
+def test_projection_matrix_is_shared_and_preserves_cosine_structure() -> None:
+    base = [math.sin(index) for index in range(256)]
+    near = [value + 0.01 for value in base]
+    unrelated = [math.cos(index * 3) for index in range(256)]
+
+    projected_base = _project_to_dimensions(base, 96)
+    projected_base_again = _project_to_dimensions(list(base), 96)
+    projected_near = _project_to_dimensions(near, 96)
+    projected_unrelated = _project_to_dimensions(unrelated, 96)
+
+    assert cosine_similarity(projected_base, projected_base_again) == pytest.approx(1.0)
+    near_similarity = cosine_similarity(projected_base, projected_near)
+    unrelated_similarity = cosine_similarity(projected_base, projected_unrelated)
+    assert near_similarity > unrelated_similarity + 0.5
+
+
+def test_get_embedding_provider_uses_zhipu_when_configured() -> None:
+    settings = Settings(
+        embedding_provider="zhipu",
+        zhipu_api_key="zhipu-test-key",
+        zhipu_embedding_model="embedding-3",
+    )
+
+    provider = get_embedding_provider(settings)
+
+    assert provider.provider == "zhipu"
+    assert provider.model == "embedding-3"
+    assert provider.dimensions == 96
+
+
+def test_get_embedding_provider_falls_back_to_local_without_zhipu_key(caplog) -> None:
+    settings = Settings(embedding_provider="zhipu", zhipu_api_key=None)
+
+    with caplog.at_level(logging.WARNING, logger="app.knowledge.embeddings"):
+        provider = get_embedding_provider(settings)
+
+    assert isinstance(provider, LocalHashingEmbeddings)
+    assert "EMBEDDING_PROVIDER=zhipu requested but ZHIPU_API_KEY is empty" in caplog.text
 
 
 def test_ingest_and_search_with_openai_embeddings(tmp_path, monkeypatch) -> None:

@@ -25,19 +25,19 @@ Examples:
 
 Example 1 (strong evidence):
 {
-  "root_cause": "Billing retry webhook regression suppressed second charge attempts.",
+  "root_cause": "Queue consumer lag delayed invoice finalization past the renewal window.",
   "confidence": "high",
   "next_actions": [
-    "Repair the retry webhook handler and replay failed retry jobs.",
-    "Draft an approval-gated customer email explaining the delayed retry.",
-    "Create a task to audit retry webhook logs for the affected window."
+    "Drain the invoice finalization queue and replay the stuck jobs.",
+    "Draft an approval-gated customer notice explaining the delayed invoices.",
+    "Create a task to add consumer-lag alerts on the invoice queue."
   ],
-  "reasoning": "SQL evidence shows 6 failed invoices tied to retry webhook failures, the billing retry runbook matches the observed pattern, and support tickets cite missing retry attempts."
+  "reasoning": "SQL evidence shows a cluster of invoices finalized late inside a single backlog window, the queue operations runbook matches the observed lag pattern, and support tickets from the same window cite missing invoices."
 }
 
 Example 2 (insufficient evidence):
 {
-  "root_cause": "MRR dropped after failed renewals, but the available evidence does not prove a specific operational root cause.",
+  "root_cause": "Renewals failed across several accounts, but the evidence collected so far does not isolate a single operational cause.",
   "confidence": "low",
   "next_actions": [
     "Collect additional account, support, and product evidence before naming a root cause.",

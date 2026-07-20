@@ -103,7 +103,9 @@ def test_low_risk_draft_action_executes_and_is_audited(
     payload = response.json()
     assert payload["risk_level"] == "low"
     assert payload["status"] == "executed"
-    assert payload["created_by"] == "agent"
+    # Operator-API actions are attributed to the operator; a client-supplied
+    # created_by is never trusted.
+    assert payload["created_by"] == "operator"
     assert payload["executed_at"] is not None
     assert payload["approval_request"] is None
     assert [event["event_type"] for event in payload["audit_events"]] == [

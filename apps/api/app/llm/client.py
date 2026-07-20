@@ -9,7 +9,6 @@ import httpx
 from app.core.config import get_settings
 from app.llm.prompts import compose_system_prompt
 from app.llm.schemas import LLMResponse, LLMUsage
-from app.llm.tokenizer import count_tokens
 
 
 class VersionConfigLike(Protocol):
@@ -47,8 +46,10 @@ class NoopLLMClient:
         usage = LLMUsage(
             provider=self.provider,
             model=self.model,
-            prompt_tokens=count_tokens(prompt),
-            completion_tokens=count_tokens(response.root_cause),
+            # No request was sent and no completion was generated, so token
+            # usage is honestly zero; the run metadata marks llm_used=False.
+            prompt_tokens=0,
+            completion_tokens=0,
             used_llm=False,
             fallback_reason="llm_provider=none",
         )

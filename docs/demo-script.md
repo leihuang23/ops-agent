@@ -73,6 +73,8 @@ Return to `/runs` or the successful run detail.
 
 > “The portfolio claim is not that the model sounds smart. It is that the system gathers the right evidence, enforces a constrained tool and action boundary, records an auditable trace, and detects behavioral regressions before release.”
 
+> “The root cause itself comes from a deterministic evidence classifier over the seeded scenarios. When an LLM key is configured, the model rewrites the diagnosis in natural language, but a conclusion is adopted only when it agrees with the evidence signature - the classifier, not the model, is the source of truth.”
+
 ## Recovery notes
 
 - If a run is already active for the incident, reset the disposable synthetic seed before rerunning the capture; the script fails instead of recording a competing run.

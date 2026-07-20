@@ -219,6 +219,8 @@ def test_project1_v1_preserves_legacy_actions_without_mutating_snapshot(
             "fetch_account_details",
             "search_docs",
             "fetch_support_tickets",
+            "create_mock_action",
+            "request_approval",
         ]
 
 
@@ -274,7 +276,9 @@ def test_default_investigation_launch_returns_queued_run_then_completes(
     assert completed["trace_id"]
     assert completed["trace_provider"]
     assert completed["final_report"] is not None
-    assert completed["token_estimate"] > 0
+    # No LLM provider is configured in tests, so no tokens were consumed; the
+    # estimate is honestly zero rather than a fabricated prompt count.
+    assert completed["token_estimate"] == 0
     assert completed["cost_estimate_usd"] == 0.0
     assert completed["steps"]
     assert completed["mock_actions"]
