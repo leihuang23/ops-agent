@@ -22,7 +22,6 @@ from app.agent.schemas import (
 from app.agent.tracing import AgentTraceHandle, queued_run_trace, start_agent_trace
 from app.agent.workflow import run_investigation_workflow
 from app.agents.service import (
-    DEFAULT_AGENT_ID,
     DEFAULT_AGENT_VERSION_ID,
     get_published_version,
 )
@@ -39,7 +38,7 @@ from app.models import (
     Incident,
     ModelUsage,
 )
-from app.tools.policy import REASON_SCOPE_NOT_ALLOWED, can_call_tool
+from app.tools.policy import can_call_tool
 from app.tools.scopes import TOOL_SCOPES
 
 ACTIVE_RUN_STALE_AFTER = timedelta(minutes=10)
@@ -744,10 +743,10 @@ def _propose_report_actions(
         "evidence_count": len(report.cited_evidence),
         "affected_account_count": len(report.affected_accounts),
     }
-    create_allowed, create_reason = _can_propose_report_action(
+    create_allowed, create_reason = can_call_tool(
         agent_version, "create_mock_action"
     )
-    approval_allowed, approval_reason = _can_propose_report_action(
+    approval_allowed, approval_reason = can_call_tool(
         agent_version, "request_approval"
     )
     if not create_allowed:
@@ -814,34 +813,6 @@ def _propose_report_actions(
                 allow_approval_requests=True,
             ),
         )
-
-
-def _can_propose_report_action(
-    version: AgentVersion, tool_id: str
-) -> tuple[bool, str | None]:
-    """Preserve Project1 v1 action behavior without changing its snapshot.
-
-    The exact seeded ``ledger_v1`` snapshot predates governed action
-    tool IDs, but its immutable scopes explicitly authorize mock actions and
-    approval requests. Only this snapshot may use those two legacy capabilities
-    by scope alone. Every other version remains subject to ``can_call_tool``'s
-    tool-and-scope checks.
-    """
-    allowed, reason = can_call_tool(version, tool_id)
-    if allowed:
-        return True, None
-    if (
-        version.id != DEFAULT_AGENT_VERSION_ID
-        or version.agent_id != DEFAULT_AGENT_ID
-        or version.status != "published"
-        or tool_id not in {"create_mock_action", "request_approval"}
-    ):
-        return False, reason
-
-    required_scope = TOOL_SCOPES[tool_id]
-    if required_scope not in (version.allowed_scopes or []):
-        return False, REASON_SCOPE_NOT_ALLOWED
-    return True, None
 
 
 def _trace_metadata_str(metadata: dict[str, Any] | None, key: str) -> str | None:
@@ -1243,8 +1214,8 @@ def backfill_report_actions(session: Session, run_id: str) -> None:
     version = session.get(AgentVersion, run.agent_version_id)
     if version is None:
         return
-    create_allowed, _ = _can_propose_report_action(version, "create_mock_action")
-    approval_allowed, _ = _can_propose_report_action(version, "request_approval")
+    create_allowed, _ = can_call_tool(version, "create_mock_action")
+    approval_allowed, _ = can_call_tool(version, "request_approval")
     if not create_allowed and not approval_allowed:
         return
     report = InvestigationReport.model_validate(run.final_report)

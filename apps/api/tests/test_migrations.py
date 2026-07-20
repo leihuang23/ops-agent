@@ -1266,3 +1266,110 @@ def test_ledger_rename_migration_rekeys_default_agent_and_references(tmp_path) -
         assert run.agent_version_id == "revenue-ops-agent_phase6"
 
     engine.dispose()
+
+
+V1_ACTION_TOOLS_MIGRATION_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "alembic"
+    / "versions"
+    / "20260719_0018_v1_action_tool_ids.py"
+)
+V1_DATA_TOOL_IDS = [
+    "query_revenue_metrics",
+    "fetch_account_details",
+    "search_docs",
+    "fetch_support_tickets",
+]
+
+
+def _insert_v1_action_tools_fixture(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                "INSERT INTO agents (id, name, description, default_model, "
+                "created_at, updated_at) VALUES ('ledger', 'Ledger', '', "
+                "'gpt-4o-mini', '2026-07-19', '2026-07-19')"
+            )
+        )
+        conn.execute(
+            sa.text(
+                "INSERT INTO agent_versions (id, agent_id, version_number, "
+                "semantic_version, status, system_prompt, model, temperature, "
+                "max_tokens, enabled_tool_ids, allowed_scopes, published_by, "
+                "published_at, created_at, updated_at) VALUES "
+                "('ledger_v1', 'ledger', 1, '1.0.0', 'published', '', "
+                "'gpt-4o-mini', 0.1, 1024, :tools, :scopes, 'bootstrap', "
+                "'2026-07-19', '2026-07-19', '2026-07-19')"
+            ),
+            {
+                "tools": json.dumps(V1_DATA_TOOL_IDS),
+                "scopes": '["read_data","write_mock_action","request_approval"]',
+            },
+        )
+        # An operator-published version without action scopes must stay
+        # untouched by the backfill.
+        conn.execute(
+            sa.text(
+                "INSERT INTO agent_versions (id, agent_id, version_number, "
+                "semantic_version, status, system_prompt, model, temperature, "
+                "max_tokens, enabled_tool_ids, allowed_scopes, published_by, "
+                "published_at, created_at, updated_at) VALUES "
+                "('ledger_v2', 'ledger', 2, '2.0.0', 'published', 'custom', "
+                "'gpt-4o-mini', 0.1, 1024, :tools, :scopes, 'operator', "
+                "'2026-07-19', '2026-07-19', '2026-07-19')"
+            ),
+            {
+                "tools": '["query_revenue_metrics"]',
+                "scopes": '["read_data"]',
+            },
+        )
+
+
+def _read_enabled_tool_ids(engine: Engine) -> dict[str, list[str]]:
+    with engine.connect() as conn:
+        rows = conn.execute(
+            sa.text("SELECT id, enabled_tool_ids FROM agent_versions")
+        ).mappings()
+    return {row["id"]: json.loads(row["enabled_tool_ids"]) for row in rows}
+
+
+def test_v1_action_tool_ids_backfill_upgrade_and_downgrade(tmp_path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'v1_action_tools.db'}")
+    Base.metadata.create_all(engine)
+    _insert_v1_action_tools_fixture(engine)
+
+    _run_in_migration_context(
+        engine,
+        "upgrade",
+        path=V1_ACTION_TOOLS_MIGRATION_PATH,
+        module_name="migration_20260719_0018_v1_action_tool_ids",
+    )
+
+    tool_ids = _read_enabled_tool_ids(engine)
+    assert tool_ids["ledger_v1"] == [
+        *V1_DATA_TOOL_IDS,
+        "create_mock_action",
+        "request_approval",
+    ]
+    assert tool_ids["ledger_v2"] == ["query_revenue_metrics"]
+
+    # Idempotent: a second upgrade leaves both rows unchanged.
+    _run_in_migration_context(
+        engine,
+        "upgrade",
+        path=V1_ACTION_TOOLS_MIGRATION_PATH,
+        module_name="migration_20260719_0018_v1_action_tool_ids",
+    )
+    assert _read_enabled_tool_ids(engine)["ledger_v1"] == tool_ids["ledger_v1"]
+
+    _run_in_migration_context(
+        engine,
+        "downgrade",
+        path=V1_ACTION_TOOLS_MIGRATION_PATH,
+        module_name="migration_20260719_0018_v1_action_tool_ids",
+    )
+    tool_ids = _read_enabled_tool_ids(engine)
+    assert tool_ids["ledger_v1"] == V1_DATA_TOOL_IDS
+    assert tool_ids["ledger_v2"] == ["query_revenue_metrics"]
+
+    engine.dispose()

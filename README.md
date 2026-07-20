@@ -39,7 +39,7 @@ flowchart LR
 
 The fixed investigation graph keeps execution auditable. Published agent versions snapshot their prompt, model, enabled tools, and allowed scopes. Every run persists its input, ordered steps, blocked calls, trace reference, model usage, final report, mock actions, approval decisions, and eval results.
 
-Phase 6 introduces action and eval permissions as a new published `ledger_phase6` snapshot. Upgrades never widen an existing published row, so historical run/version references remain reproducible.
+Phase 6 introduces action and eval permissions as a new published `ledger_phase6` snapshot. Published versions are immutable through the runtime API; the only writes to published rows are explicit, reversible Alembic data backfills (`20260709_0012` for scopes, `20260719_0018` for the v1 action tool IDs) that keep the seeded baseline consistent with the uniform tool policy, so historical run/version references remain reproducible.
 
 ### What to inspect first
 
@@ -202,16 +202,28 @@ credentials:
 - `EMBEDDING_PROVIDER=local`
 - `EMBEDDING_MODEL=local-hashing-v1`
 
-To use OpenAI embeddings instead, set:
+To use Zhipu (GLM) embeddings instead, set:
+
+- `EMBEDDING_PROVIDER=zhipu`
+- `ZHIPU_EMBEDDING_MODEL=embedding-3`
+- `ZHIPU_API_KEY=...`
+
+OpenAI embeddings are also supported:
 
 - `EMBEDDING_PROVIDER=openai`
 - `OPENAI_EMBEDDING_MODEL=text-embedding-3-small`
 - `OPENAI_API_KEY=sk-...`
 
-OpenAI embeddings are projected to the same 96-dimensional store used by the
-local hashing provider, so no schema migration is required. If `EMBEDDING_PROVIDER`
-is set to `openai` without an `OPENAI_API_KEY`, the app falls back to local
-hashing with a warning.
+Hosted providers (Zhipu `embedding-3` requested at 256 dimensions, OpenAI
+`text-embedding-3` at its smallest native dimension) are projected onto the
+same 96-dimensional store used by the local hashing provider through a single
+shared deterministic projection matrix, so cosine structure between vectors is
+preserved and no schema migration is required. If the selected provider's API
+key is missing, the app falls back to local hashing with a warning.
+
+Switching `EMBEDDING_PROVIDER` only changes how new vectors are computed:
+re-run `python -m app.knowledge.ingestion` after switching so every stored
+chunk is re-embedded into the same space before searching.
 
 - `DOCUMENT_INGEST_TOKEN=` optional token for the mutating HTTP ingest endpoint
 - `EVAL_RUN_TOKEN=` optional token that enables the mutating HTTP eval runner
@@ -220,10 +232,14 @@ hashing with a warning.
 
 ## LLM Configuration
 
-Agent diagnosis can use an LLM provider or fall back to a deterministic
-evidence matcher. By default no external LLM is required:
+Root cause is determined by a deterministic evidence classifier that branches
+on concrete signals in the retrieved evidence. An LLM provider is optional:
+when configured, it synthesizes the natural-language diagnosis, and its answer
+is adopted only when it agrees with the deterministic classifier's scenario
+signature, so the classifier remains the source of truth. By default no
+external LLM is required:
 
-- `LLM_PROVIDER=none` uses the deterministic classifier and reports zero cost.
+- `LLM_PROVIDER=none` uses the deterministic classifier and reports zero cost and zero token usage.
 
 To enable LLM-backed root-cause synthesis, set:
 
@@ -236,8 +252,9 @@ To enable LLM-backed root-cause synthesis, set:
 
 When an LLM is configured, the agent records provider, model, latency,
 prompt/completion tokens, and a cost estimate on each run. If the LLM call
-fails or returns unusable output, the run falls back to the deterministic
-classifier and records the fallback reason in `trace_metadata`.
+fails, returns unusable output, or disagrees with the deterministic
+classifier, the run falls back to the deterministic diagnosis and records the
+fallback reason in `trace_metadata`.
 
 ## Observability, Logging, And Tracing
 
@@ -362,6 +379,7 @@ See [docs/security.md](docs/security.md) for trust boundaries, residual risks, a
 - All business records are deterministic synthetic data; there are no real SaaS, CRM, email, or payment integrations.
 - External actions remain mocks. Approval demonstrates the state machine and audit boundary, not message delivery.
 - The Ledger investigation workflow is a fixed linear DAG; the control plane versions configuration, not graph topology.
+- Root cause comes from a deterministic evidence classifier over the seeded scenario signals; the optional LLM layer rewrites the diagnosis but is adopted only when it agrees with that classifier. Anomalies outside the seeded signature space intentionally resolve to the explicit uncertainty path.
 - Eval scoring uses exact deterministic root-cause signatures rather than an LLM judge or semantic equivalence.
 - Hosted tracing is optional; without credentials, every run still has a local trace identifier but not a hosted trace page.
 - The provided Render topology includes a continuously running worker and managed data services, so review current provider pricing before deploying it.

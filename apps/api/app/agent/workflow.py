@@ -749,12 +749,51 @@ def _doc_query_for_incident(incident: dict[str, Any]) -> str:
 
 
 def _hypotheses_for_incident(incident: dict[str, Any]) -> list[str]:
+    """Derive working hypotheses from the incident's own signals.
+
+    Every hypothesis names the concrete metric movement, ticket categories, or
+    product events attached to this incident, so two different incidents never
+    surface the same checklist in the run timeline.
+    """
+    metric = incident["metric_evidence"]
+    delta_percent = metric.get("delta_percent")
+    movement = (
+        f"{delta_percent:+.1f}%"
+        if isinstance(delta_percent, (int, float))
+        else "the observed"
+    )
     hypotheses = [
-        "Failed renewal invoices explain the paid MRR delta.",
-        "Recent support tickets identify the operational cause.",
-        "Retrieved runbooks match the observed invoice and ticket pattern.",
-        "Product disruption or support backlog is a contributing factor rather than the primary revenue cause.",
+        f"Failed or delayed renewal invoices explain {movement} paid MRR movement "
+        f"in {metric['metric_name']}.",
     ]
+
+    ticket_categories = sorted(
+        {signal["category"] for signal in incident.get("support_signals", [])}
+    )
+    if ticket_categories:
+        hypotheses.append(
+            "Recent "
+            + ", ".join(ticket_categories[:3])
+            + " tickets from affected accounts point at the operational cause."
+        )
+    else:
+        hypotheses.append(
+            "No support signals are attached, so the cause must come from "
+            "invoice and product evidence alone."
+        )
+
+    event_names = sorted(
+        {signal["event_name"] for signal in incident.get("product_signals", [])}
+    )
+    if event_names:
+        hypotheses.append(
+            "Product events ("
+            + ", ".join(event_names[:3])
+            + ") are a contributing factor rather than the primary revenue cause."
+        )
+    hypotheses.append(
+        "Retrieved runbooks match the observed invoice and ticket pattern."
+    )
     return hypotheses
 
 
@@ -844,6 +883,14 @@ def _diagnosis_is_supported_by_evidence(
     llm_diagnosis: Diagnosis,
     deterministic_diagnosis: Diagnosis,
 ) -> bool:
+    """Gate an LLM diagnosis by agreement with the deterministic classifier.
+
+    The deterministic evidence classifier is the source of truth for root
+    cause in this product slice: an LLM diagnosis is adopted only when it
+    lands on the same scenario signature, or when it honestly declines to
+    name a specific cause. Anything else is discarded and the run records
+    ``unsupported_llm_diagnosis: deterministic_fallback``.
+    """
     if not llm_diagnosis.is_specific:
         return _contains_any(
             llm_diagnosis.root_cause,
@@ -857,6 +904,12 @@ def _diagnosis_is_supported_by_evidence(
 
 
 def _root_cause_signature(root_cause: str) -> str | None:
+    """Map a root-cause sentence to its scenario signature bucket.
+
+    This is the shared vocabulary between the deterministic classifier and the
+    LLM gate: both sides must land on the same bucket for an LLM diagnosis to
+    be adopted.
+    """
     text = root_cause.lower()
     signatures: dict[str, tuple[tuple[str, ...], ...]] = {
         "retry_webhook": (("retry", "webhook"),),
@@ -890,6 +943,13 @@ def _diagnose_from_evidence(
     doc_results: dict[str, Any],
     support_tickets: dict[str, Any],
 ) -> Diagnosis:
+    """Deterministic evidence classifier: the source of truth for root cause.
+
+    Branches on concrete evidence signals (failed-invoice reasons plus
+    ticket/document keywords) over the seeded scenarios. Evidence that matches
+    no known signature yields the explicit uncertainty diagnosis rather than
+    a guess.
+    """
     evidence_text = _evidence_text(
         account_details=account_details,
         doc_results=doc_results,

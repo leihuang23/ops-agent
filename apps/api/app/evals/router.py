@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from sqlalchemy.orm import Session
 
 from app.agent.persistence import utcnow_naive
-from app.agents.service import DEFAULT_AGENT_ID, DEFAULT_AGENT_VERSION_ID
+from app.agents.service import DEFAULT_AGENT_VERSION_ID
 from app.core.access import require_demo_data_access
 from app.core.config import get_settings
 from app.core.limiter import limiter
@@ -16,8 +16,6 @@ from app.evals.runner import build_eval_run_summary, list_latest_eval_results
 from app.evals.schemas import EvalResultsReport, EvalRunSummary
 from app.evals.tasks import run_eval_suite_task
 from app.models import AgentVersion
-from app.runs.service import record_blocked_control_plane_tool_attempt
-from app.tools.policy import can_call_tool
 
 _settings = get_settings()
 
@@ -77,29 +75,10 @@ def run_evals(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="The Project1 v1 eval baseline is unavailable.",
         )
-    allowed, blocked_reason = can_call_tool(version, "run_eval")
-    # This token-gated endpoint is the Project1 compatibility surface and
-    # predates the governed run_eval capability. The exact immutable v1 may
-    # therefore run here despite lacking that tool ID/scope. Phase 5 dataset
-    # runs and every non-v1 candidate continue through strict can_call_tool.
-    is_project1_v1 = (
-        version.id == DEFAULT_AGENT_VERSION_ID
-        and version.agent_id == DEFAULT_AGENT_ID
-    )
-    if not allowed and not is_project1_v1:
-        reason = blocked_reason or "tool_not_enabled"
-        blocked_run_id = record_blocked_control_plane_tool_attempt(
-            db,
-            agent_version_id=version.id,
-            tool_name="run_eval",
-            blocked_reason=reason,
-            input_payload={"operation": "run_eval", "dataset_id": None},
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"run_eval blocked: {reason}",
-            headers={"X-Agent-Run-Id": blocked_run_id},
-        )
+    # This is an operator surface, not an agent tool dispatch: access is gated
+    # by EVAL_RUN_TOKEN (fail-closed in every environment when unset), so no
+    # per-version tool policy applies here. Agent-governed eval runs go through
+    # the Phase 5 dataset API, which enforces can_call_tool on the candidate.
     eval_run_id = f"evalrun_{uuid4().hex[:16]}"
     started_at = utcnow_naive()
     _enqueue_eval_suite(eval_run_id)

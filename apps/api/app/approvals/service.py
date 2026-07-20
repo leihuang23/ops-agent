@@ -29,6 +29,10 @@ REPORT_ACTION_TYPES = (
     "update_account_note",
 )
 ACTION_ACTOR = "agent"
+# Actions created through the operator API (POST /mock-actions) are attributed
+# to the operator so the audit trail can tell human-injected actions apart
+# from agent-proposed ones. Client-supplied actor fields are never trusted.
+OPERATOR_ACTOR = "operator"
 APPROVER_ACTOR = "demo-approver"
 PAYLOAD_CONTRACTS = {
     "draft_slack_message": {
@@ -50,13 +54,22 @@ PAYLOAD_CONTRACTS = {
 }
 
 
-def create_mock_action(session: Session, payload: MockActionCreate) -> MockActionRead:
-    """Legacy operator API: create a mock action and gate high-risk actions."""
+def create_mock_action(
+    session: Session,
+    payload: MockActionCreate,
+    *,
+    actor: str = OPERATOR_ACTOR,
+) -> MockActionRead:
+    """Legacy operator API: create a mock action and gate high-risk actions.
+
+    Operator-created actions are attributed to ``OPERATOR_ACTOR`` in the audit
+    trail; the governed tool wrappers below pass ``ACTION_ACTOR`` instead.
+    """
     run = session.get(AgentRun, payload.run_id)
     if run is None:
         raise LookupError(f"Unknown agent run id: {payload.run_id}")
 
-    action = _create_mock_action_record(session, payload, actor=ACTION_ACTOR)
+    action = _create_mock_action_record(session, payload, actor=actor)
     session.commit()
     return get_mock_action(session, action.id)
 
@@ -69,7 +82,7 @@ def create_low_risk_mock_action(
         raise ValueError(
             f"{payload.action_type} requires the request_approval tool"
         )
-    return create_mock_action(session, payload)
+    return create_mock_action(session, payload, actor=ACTION_ACTOR)
 
 
 def request_high_risk_approval(
@@ -80,7 +93,7 @@ def request_high_risk_approval(
         raise ValueError(
             f"{payload.action_type} does not require an approval request"
         )
-    return create_mock_action(session, payload)
+    return create_mock_action(session, payload, actor=ACTION_ACTOR)
 
 
 def _create_mock_action_record(
